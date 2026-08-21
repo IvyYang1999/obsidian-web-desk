@@ -1,24 +1,32 @@
 import { Notice, Plugin, WorkspaceLeaf } from "obsidian";
+import { DeskEmbed } from "./embed";
 import { TextInputModal } from "./modals";
 import { WebDeskSettingTab } from "./settings";
 import {
+  Arrow,
   CanvasTransform,
   DEFAULT_SETTINGS,
   GroupBox,
+  TextBox,
   VIEW_TYPE_WEB_DESK,
   WebDeskSettings,
 } from "./types";
 import { WebDeskHost, WebDeskView } from "./view";
+import { getErrorMessage } from "./util";
 
 interface WebDeskPluginData {
   settings?: Partial<WebDeskSettings>;
   groups?: GroupBox[];
+  textboxes?: TextBox[];
+  arrows?: Arrow[];
   view?: CanvasTransform;
 }
 
 export default class WebDeskPlugin extends Plugin {
   settings: WebDeskSettings = { ...DEFAULT_SETTINGS };
   private groups: GroupBox[] = [];
+  private textBoxes: TextBox[] = [];
+  private arrows: Arrow[] = [];
   private viewTransform: CanvasTransform = { panX: 0, panY: 0, zoom: 1 };
   private saveDataTimer: number | null = null;
 
@@ -30,6 +38,16 @@ export default class WebDeskPlugin extends Plugin {
       getGroups: () => this.groups,
       setGroups: (groups) => {
         this.groups = groups;
+        this.saveDataDebounced();
+      },
+      getTextBoxes: () => this.textBoxes,
+      setTextBoxes: (boxes) => {
+        this.textBoxes = boxes;
+        this.saveDataDebounced();
+      },
+      getArrows: () => this.arrows,
+      setArrows: (arrows) => {
+        this.arrows = arrows;
         this.saveDataDebounced();
       },
       getTransform: () => this.viewTransform,
@@ -71,6 +89,15 @@ export default class WebDeskPlugin extends Plugin {
     });
 
     this.addSettingTab(new WebDeskSettingTab(this.app, this));
+
+    // 笔记内嵌画布：```web-desk 代码块（数据存块内，编辑写回，oneday 同款姿势）
+    this.registerMarkdownCodeBlockProcessor("web-desk", (source, el, ctx) => {
+      try {
+        new DeskEmbed(el, source, this.app, ctx).render();
+      } catch (error) {
+        el.createEl("pre", { text: `web-desk 画布渲染失败：${getErrorMessage(error)}` });
+      }
+    });
   }
 
   onunload(): void {
@@ -83,6 +110,8 @@ export default class WebDeskPlugin extends Plugin {
     const data = (await this.loadData()) as WebDeskPluginData | null;
     this.settings = { ...DEFAULT_SETTINGS, ...(data?.settings ?? {}) };
     this.groups = Array.isArray(data?.groups) ? data!.groups! : [];
+    this.textBoxes = Array.isArray(data?.textboxes) ? data!.textboxes! : [];
+    this.arrows = Array.isArray(data?.arrows) ? data!.arrows! : [];
     this.viewTransform = data?.view ?? { panX: 0, panY: 0, zoom: 1 };
   }
 
@@ -94,6 +123,8 @@ export default class WebDeskPlugin extends Plugin {
     return {
       settings: this.settings,
       groups: this.groups,
+      textboxes: this.textBoxes,
+      arrows: this.arrows,
       view: this.viewTransform,
     };
   }

@@ -213,3 +213,97 @@
   gap: 8px;
   margin-top: 12px;
 }
+
+/* 笔记内嵌画布 */
+.web-desk-embed {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  background-color: var(--background-secondary);
+  background-image: radial-gradient(circle, var(--background-modifier-border) 1px, transparent 1px);
+  background-size: 24px 24px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.web-desk-embed-canvas {
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.web-desk-embed .web-desk-hint {
+  display: flex;
+  pointer-events: none;
+}
+
+/* 主画布：文本框（缺 position:absolute 会让拖拽改 left/top 无视觉效果——V2 教训） */
+.web-desk-textbox {
+  position: absolute;
+  border: 2px dashed;
+  border-radius: 10px;
+  z-index: 6;
+}
+
+.web-desk-textbox-text {
+  padding: 10px 12px;
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+  white-space: pre-wrap;
+  overflow: hidden;
+  line-height: 1.5;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.web-desk-textbox-text.is-editing {
+  outline: 1px solid var(--interactive-accent);
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+  overflow: auto;
+}
+
+.web-desk-textbox-resize {
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  width: 16px;
+  height: 16px;
+  border-right: 3px solid;
+  border-bottom: 3px solid;
+  border-color: inherit;
+  border-bottom-right-radius: 8px;
+  cursor: nwse-resize;
+}
+
+/* 主画布：箭头 */
+.web-desk-arrow {
+  fill: none;
+  stroke-width: 2;
+  pointer-events: none;
+}
+
+.web-desk-arrow.is-selected {
+  stroke-width: 3.5;
+  filter: drop-shadow(0 0 3px var(--interactive-accent));
+}
+
+.web-desk-arrow-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.web-desk-arrow-label {
+  fill: var(--text-muted);
+  font-size: 13px;
+  paint-order: stroke;
+  stroke: var(--background-primary);
+  stroke-width: 3px;
+  pointer-events: none;
+}

@@ -6,8 +6,11 @@ import {
   BookmarkCard,
   CANVAS_BOUND,
   CanvasTransform,
+  Arrow,
+  ArrowEndpoint,
   GROUP_COLORS,
   GroupBox,
+  TextBox,
   SIZE_LARGE,
   SIZE_MEDIUM,
   SIZE_SMALL,
@@ -20,6 +23,10 @@ export interface WebDeskHost {
   getSettings(): WebDeskSettings;
   getGroups(): GroupBox[];
   setGroups(groups: GroupBox[]): void;
+  getTextBoxes(): TextBox[];
+  setTextBoxes(boxes: TextBox[]): void;
+  getArrows(): Arrow[];
+  setArrows(arrows: Arrow[]): void;
   getTransform(): CanvasTransform;
   setTransform(transform: CanvasTransform): void;
 }
@@ -31,6 +38,8 @@ interface Point {
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 3;
+const SVG_NS = "http://www.w3.org/2000/svg";
+const ARROW_SPAN = 20000;
 
 export class WebDeskView extends ItemView {
   private readonly host: WebDeskHost;
@@ -43,11 +52,21 @@ export class WebDeskView extends ItemView {
   private cards: BookmarkCard[] = [];
   private iconEls = new Map<string, HTMLElement>();
   private groupEls = new Map<string, HTMLElement>();
+  private textBoxEls = new Map<string, HTMLElement>();
+  private arrowsG: SVGGElement | null = null;
+  private arrowMarkerIds = new Map<string, string>();
+  private arrowEls = new Map<string, SVGPathElement>();
+  private selectedArrowId: string | null = null;
+  private arrowDraft: ArrowEndpoint | null = null;
+  private pendingArrowStart = false;
+  private editingTextBoxId: string | null = null;
   private selected = new Set<string>();
   private transform: CanvasTransform = { panX: 0, panY: 0, zoom: 1 };
 
   /** >0 表示有交互进行中（拖拽/导入），推迟重绘。 */
   private interactionLock = 0;
+  /** 近期本地写回的坐标（path → x/y/时刻）：metadataCache 滞后窗口内以本地为准，防视觉回跳。 */
+  private layoutWrites = new Map<string, { x: number; y: number; at: number }>();
   private refreshTimer: number | null = null;
   private autoPlaceRunning = false;
 
@@ -100,7 +119,7 @@ export class WebDeskView extends ItemView {
     this.hintEl.createDiv({ cls: "web-desk-hint-title", text: "网页桌面" });
     this.hintEl.createDiv({
       cls: "web-desk-hint-body",
-      text: "把网页链接拖到这里，或右键画布 → 收藏 URL。像整理电脑桌面一样拖拽归类。",
+      text: "把网页链接拖到这里收藏。右键画布可新建分组 / 文本框 / 箭头，右键图标可从它画箭头。",
     });
 
     const toolbar = this.rootEl.createDiv({ cls: "web-desk-toolbar" });
@@ -154,7 +173,23 @@ export class WebDeskView extends ItemView {
       .map((file) => readCard(file, this.app, this.settings.defaultIconSize))
       .filter((card): card is BookmarkCard => card !== null);
 
+    // 写盘成功但 metadataCache 未跟上时，cache 给的是旧坐标——以本地近期写入为准，防拖拽回跳
+    const now = Date.now();
+    for (const card of this.cards) {
+      const write = this.layoutWrites.get(card.path);
+      if (!write) continue;
+      if (now - write.at > 10_000) {
+        this.layoutWrites.delete(card.path);
+        continue;
+      }
+      if (card.x !== write.x || card.y !== write.y) {
+        card.x = write.x;
+        card.y = write.y;
+      }
+    }
+
     await this.autoPlaceNewcomers();
+    this.pruneDanglingArrows();
     this.render();
   }
 
@@ -224,14 +259,18 @@ export class WebDeskView extends ItemView {
   private render(): void {
     this.iconEls.clear();
     this.groupEls.clear();
+    this.textBoxEls.clear();
     this.canvasEl.empty();
 
+    this.buildSvgLayer();
+    this.renderArrows();
     for (const group of this.host.getGroups()) {
       this.renderGroup(group);
     }
     for (const card of this.cards) {
       this.renderIcon(card);
     }
+    this.renderTextBoxes();
 
     this.hintEl.style.display = this.cards.length === 0 ? "flex" : "none";
     this.syncSelection();
@@ -425,12 +464,17 @@ export class WebDeskView extends ItemView {
       event.button !== 0 ||
       target.closest(".web-desk-icon") ||
       target.closest(".web-desk-group") ||
+      target.closest(".web-desk-textbox") ||
       target.closest(".web-desk-toolbar")
     ) {
       return;
     }
 
     this.rootEl.focus();
+
+    if (this.interceptArrowClick(event)) {
+      return;
+    }
 
     const start = this.clientToCanvas(event.clientX, event.clientY);
     const baseSelection = event.shiftKey ? new Set(this.selected) : new Set<string>();
@@ -464,6 +508,7 @@ export class WebDeskView extends ItemView {
       if (!moved) {
         if (!upEvent.shiftKey) {
           this.selected.clear();
+          this.clearArrowSelection();
           this.syncSelection();
         }
         return;
@@ -487,13 +532,23 @@ export class WebDeskView extends ItemView {
 
   private onKeyDown(event: KeyboardEvent): void {
     if (event.key === "Escape") {
+      if (this.arrowDraft || this.pendingArrowStart) {
+        this.cancelArrowDraft();
+        return;
+      }
       this.selected.clear();
+      this.clearArrowSelection();
       this.syncSelection();
       return;
     }
     if ((event.key === "Delete" || event.key === "Backspace") && this.selected.size > 0) {
       event.preventDefault();
       this.confirmDeleteSelected();
+      return;
+    }
+    if ((event.key === "Delete" || event.key === "Backspace") && this.selectedArrowId) {
+      event.preventDefault();
+      this.removeArrow(this.selectedArrowId);
       return;
     }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
@@ -509,6 +564,7 @@ export class WebDeskView extends ItemView {
       return;
     }
     event.preventDefault();
+    const point = this.clientToCanvas(event.clientX, event.clientY);
 
     const menu = new Menu();
     menu.addItem((item) =>
@@ -521,7 +577,19 @@ export class WebDeskView extends ItemView {
       item
         .setTitle("新建分组")
         .setIcon("square-dashed")
-        .onClick(() => this.createGroupAt(this.clientToCanvas(event.clientX, event.clientY))),
+        .onClick(() => this.createGroupAt(point)),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("新建文本框")
+        .setIcon("sticky-note")
+        .onClick(() => this.addTextBox(point.x - 130, point.y - 60)),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("画箭头（点两点）")
+        .setIcon("move-up-right")
+        .onClick(() => this.beginArrowFromScratch()),
     );
     menu.addSeparator();
     menu.addItem((item) =>
@@ -548,6 +616,9 @@ export class WebDeskView extends ItemView {
     if (event.button !== 0) {
       return;
     }
+    if (this.interceptArrowClick(event)) {
+      return;
+    }
     event.stopPropagation();
     this.rootEl.focus();
 
@@ -567,6 +638,8 @@ export class WebDeskView extends ItemView {
       this.syncSelection();
     }
 
+    // 拖拽全程持锁：期间 vault 变化触发的 refresh 不得重建 DOM（否则拖拽悬空）
+    this.interactionLock += 1;
     const startClient = { x: event.clientX, y: event.clientY };
     const dragged = [...this.selected]
       .map((path) => {
@@ -609,12 +682,15 @@ export class WebDeskView extends ItemView {
       el.removeEventListener("pointercancel", onUp);
 
       if (!moved) {
+        this.interactionLock -= 1;
         this.activateCard(card);
         return;
       }
       void this.persistDragged(
         dragged.map((entry) => entry.card),
-      );
+      ).finally(() => {
+        this.interactionLock -= 1;
+      });
     };
 
     el.addEventListener("pointermove", onMove);
@@ -635,6 +711,7 @@ export class WebDeskView extends ItemView {
     try {
       for (const card of cards) {
         const file = this.app.vault.getAbstractFileByPath(card.path);
+        console.warn("[webdesk] persistDragged", card.path, "file=", file ? "TFile" : String(file), "->", Math.round(card.x), Math.round(card.y));
         if (!(file instanceof TFile)) {
           continue;
         }
@@ -648,12 +725,15 @@ export class WebDeskView extends ItemView {
           y: card.y,
           group: group || null,
         });
+        this.layoutWrites.set(card.path, { x: card.x, y: card.y, at: Date.now() });
+        console.warn("[webdesk] writeDeskFields done", card.path, "disk-now=", (await this.app.vault.adapter.read(card.path)).match(/^desk_x:.*$/m)?.[0]);
       }
     } catch (error) {
       new Notice(`保存位置失败：${getErrorMessage(error)}`, 5000);
     } finally {
       this.interactionLock -= 1;
     }
+    this.renderArrows();
   }
 
   private onIconContextMenu(event: MouseEvent, card: BookmarkCard): void {
@@ -696,6 +776,12 @@ export class WebDeskView extends ItemView {
             new Notice("已复制链接");
           }
         }),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("从这里画箭头")
+        .setIcon("move-up-right")
+        .onClick(() => this.beginArrowDraft({ kind: "card", ref: card.path })),
     );
     menu.addSeparator();
 
@@ -857,6 +943,9 @@ export class WebDeskView extends ItemView {
   }
 
   private onGroupHeaderPointerDown(event: PointerEvent, group: GroupBox): void {
+    if (this.interceptArrowClick(event)) {
+      return;
+    }
     if (event.button !== 0) {
       return;
     }
@@ -868,6 +957,7 @@ export class WebDeskView extends ItemView {
       return;
     }
 
+    this.interactionLock += 1;
     const startClient = { x: event.clientX, y: event.clientY };
     const origin = { x: group.x, y: group.y };
     let moved = false;
@@ -890,8 +980,10 @@ export class WebDeskView extends ItemView {
     const onUp = (): void => {
       el.removeEventListener("pointermove", onMove);
       el.removeEventListener("pointerup", onUp);
+      this.interactionLock -= 1;
       if (moved) {
         this.host.setGroups(this.host.getGroups());
+        this.renderArrows();
         void this.recomputeGroupMembership();
       }
     };
@@ -911,6 +1003,7 @@ export class WebDeskView extends ItemView {
       return;
     }
 
+    this.interactionLock += 1;
     const startClient = { x: event.clientX, y: event.clientY };
     const origin = { w: group.w, h: group.h };
     let moved = false;
@@ -933,8 +1026,10 @@ export class WebDeskView extends ItemView {
     const onUp = (): void => {
       el.removeEventListener("pointermove", onMove);
       el.removeEventListener("pointerup", onUp);
+      this.interactionLock -= 1;
       if (moved) {
         this.host.setGroups(this.host.getGroups());
+        this.renderArrows();
         void this.recomputeGroupMembership();
       }
     };
@@ -952,6 +1047,12 @@ export class WebDeskView extends ItemView {
         .setTitle("重命名")
         .setIcon("pencil")
         .onClick(() => this.renameGroup(group)),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("从这里画箭头")
+        .setIcon("move-up-right")
+        .onClick(() => this.beginArrowDraft({ kind: "group", ref: group.id })),
     );
 
     menu.addItem((item) =>
@@ -1055,6 +1156,535 @@ export class WebDeskView extends ItemView {
     }
   }
 
+  // ---------- 文本框与箭头 ----------
+
+  private buildSvgLayer(): void {
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("class", "web-desk-arrows");
+    svg.setAttribute(
+      "style",
+      `position:absolute;left:${-ARROW_SPAN}px;top:${-ARROW_SPAN}px;width:${ARROW_SPAN * 2}px;height:${ARROW_SPAN * 2}px;pointer-events:none;overflow:visible`,
+    );
+    svg.setAttribute("viewBox", `${-ARROW_SPAN} ${-ARROW_SPAN} ${ARROW_SPAN * 2} ${ARROW_SPAN * 2}`);
+
+    const defs = document.createElementNS(SVG_NS, "defs");
+    const addMarker = (id: string, color: string): void => {
+      const marker = document.createElementNS(SVG_NS, "marker");
+      marker.setAttribute("id", id);
+      marker.setAttribute("viewBox", "0 0 10 10");
+      marker.setAttribute("refX", "9");
+      marker.setAttribute("refY", "5");
+      marker.setAttribute("markerWidth", "7");
+      marker.setAttribute("markerHeight", "7");
+      marker.setAttribute("orient", "auto-start-reverse");
+      const p = document.createElementNS(SVG_NS, "path");
+      p.setAttribute("d", "M0,0 L10,5 L0,10 z");
+      p.style.fill = color;
+      marker.appendChild(p);
+      defs.appendChild(marker);
+    };
+    this.arrowMarkerIds.clear();
+    addMarker("wd-arrow-accent", "var(--interactive-accent)");
+    GROUP_COLORS.forEach((color, index) => {
+      const id = `wd-arrow-${index}`;
+      addMarker(id, color);
+      this.arrowMarkerIds.set(color, id);
+    });
+    svg.appendChild(defs);
+
+    const g = document.createElementNS(SVG_NS, "g");
+    svg.appendChild(g);
+    this.canvasEl.appendChild(svg);
+    this.arrowsG = g;
+  }
+
+  private endpointRect(ep: ArrowEndpoint): Rect | null {
+    if (ep.kind === "card") {
+      const card = this.cards.find((entry) => entry.path === ep.ref);
+      return card ? { x: card.x, y: card.y, w: card.size + 24, h: card.size + 44 } : null;
+    }
+    if (ep.kind === "textbox") {
+      const box = this.host.getTextBoxes().find((entry) => entry.id === ep.ref);
+      return box ? { x: box.x, y: box.y, w: box.w, h: box.h } : null;
+    }
+    if (ep.kind === "group") {
+      const group = this.host.getGroups().find((entry) => entry.id === ep.ref);
+      return group ? { x: group.x, y: group.y, w: group.w, h: group.h } : null;
+    }
+    return null;
+  }
+
+  private endpointPoint(ep: ArrowEndpoint): Point | null {
+    const rect = this.endpointRect(ep);
+    if (rect) {
+      return { x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 };
+    }
+    if (ep.kind === "point") {
+      const [x, y] = ep.ref.split(",").map(Number);
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        return { x, y };
+      }
+    }
+    return null;
+  }
+
+  private renderArrows(): void {
+    if (!this.arrowsG) {
+      return;
+    }
+    this.arrowsG.innerHTML = "";
+    this.arrowEls.clear();
+
+    for (const arrow of this.host.getArrows()) {
+      const p1 = this.endpointPoint(arrow.from);
+      const p2 = this.endpointPoint(arrow.to);
+      if (!p1 || !p2) {
+        continue;
+      }
+      const r1 = this.endpointRect(arrow.from);
+      const r2 = this.endpointRect(arrow.to);
+      const a = r1 ? rectEdgePoint(r1, p2) : p1;
+      const b = r2 ? rectEdgePoint(r2, p1) : p2;
+      const d = `M ${a.x} ${a.y} L ${b.x} ${b.y}`;
+
+      // 透明加粗命中层（负责事件），可见细线层（负责显示）
+      const hit = document.createElementNS(SVG_NS, "path");
+      hit.setAttribute("d", d);
+      hit.setAttribute("class", "web-desk-arrow-hit");
+      hit.addEventListener("pointerdown", (event) => this.onArrowPointerDown(event, arrow));
+      hit.addEventListener("contextmenu", (event) => this.onArrowContextMenu(event, arrow));
+      this.arrowsG.appendChild(hit);
+
+      const path = document.createElementNS(SVG_NS, "path");
+      path.setAttribute("d", d);
+      path.setAttribute(
+        "class",
+        arrow.id === this.selectedArrowId ? "web-desk-arrow is-selected" : "web-desk-arrow",
+      );
+      path.style.stroke = arrow.color || "var(--interactive-accent)";
+      path.setAttribute("marker-end", `url(#${this.arrowMarkerIds.get(arrow.color) ?? "wd-arrow-accent"})`);
+      this.arrowsG.appendChild(path);
+      this.arrowEls.set(arrow.id, path);
+
+      if (arrow.label) {
+        const text = document.createElementNS(SVG_NS, "text");
+        text.setAttribute("class", "web-desk-arrow-label");
+        text.setAttribute("x", String((a.x + b.x) / 2));
+        text.setAttribute("y", String((a.y + b.y) / 2 - 6));
+        text.setAttribute("text-anchor", "middle");
+        text.textContent = arrow.label;
+        this.arrowsG.appendChild(text);
+      }
+    }
+  }
+
+  private onArrowPointerDown(event: PointerEvent, arrow: Arrow): void {
+    if (this.interceptArrowClick(event)) {
+      return;
+    }
+    if (event.button !== 0) {
+      return;
+    }
+    event.stopPropagation();
+    this.selectedArrowId = this.selectedArrowId === arrow.id ? null : arrow.id;
+    this.selected.clear();
+    this.syncSelection();
+    this.renderArrows();
+  }
+
+  private onArrowContextMenu(event: MouseEvent, arrow: Arrow): void {
+    event.preventDefault();
+    event.stopPropagation();
+    this.selectedArrowId = arrow.id;
+    this.renderArrows();
+
+    const menu = new Menu();
+    menu.addItem((item) =>
+      item
+        .setTitle("编辑标签…")
+        .setIcon("tag")
+        .onClick(() => {
+          new TextInputModal(this.app, {
+            title: "箭头标签",
+            initial: arrow.label,
+            onSubmit: (value) => {
+              const arrows = this.host.getArrows();
+              const target = arrows.find((entry) => entry.id === arrow.id);
+              if (target) {
+                target.label = value;
+                this.host.setArrows(arrows);
+              }
+              this.renderArrows();
+            },
+          }).open();
+        }),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("换颜色")
+        .setIcon("palette")
+        .onClick(() => {
+          const arrows = this.host.getArrows();
+          const target = arrows.find((entry) => entry.id === arrow.id);
+          if (target) {
+            const index = GROUP_COLORS.indexOf(target.color);
+            target.color = GROUP_COLORS[(index + 1) % GROUP_COLORS.length];
+            this.host.setArrows(arrows);
+          }
+          this.renderArrows();
+        }),
+    );
+    menu.addSeparator();
+    menu.addItem((item) =>
+      item
+        .setTitle("删除箭头")
+        .setIcon("trash-2")
+        .onClick(() => this.removeArrow(arrow.id)),
+    );
+    menu.showAtMouseEvent(event);
+  }
+
+  private renderTextBoxes(): void {
+    for (const box of this.host.getTextBoxes()) {
+      const el = this.canvasEl.createDiv({ cls: "web-desk-textbox" });
+      el.style.left = `${box.x}px`;
+      el.style.top = `${box.y}px`;
+      el.style.width = `${box.w}px`;
+      el.style.height = `${box.h}px`;
+      el.style.borderColor = box.color;
+      el.style.backgroundColor = hexToRgba(box.color, 0.08);
+      el.setAttribute("data-tb-id", box.id);
+
+      const text = el.createDiv({ cls: "web-desk-textbox-text", text: box.text });
+      const handle = el.createDiv({ cls: "web-desk-textbox-resize" });
+
+      el.addEventListener("pointerdown", (event) => this.onTextBoxPointerDown(event, box, el));
+      el.addEventListener("dblclick", (event) => {
+        event.stopPropagation();
+        this.editTextBox(box, text);
+      });
+      el.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.onTextBoxContextMenu(event, box, text);
+      });
+      handle.addEventListener("pointerdown", (event) =>
+        this.onTextBoxResizePointerDown(event, box, el),
+      );
+
+      this.textBoxEls.set(box.id, el);
+    }
+  }
+
+  private onTextBoxPointerDown(event: PointerEvent, box: TextBox, el: HTMLElement): void {
+    if (this.interceptArrowClick(event)) {
+      return;
+    }
+    if (event.button !== 0 || this.editingTextBoxId === box.id) {
+      return;
+    }
+    event.stopPropagation();
+    this.rootEl.focus();
+
+    this.interactionLock += 1;
+    const startClient = { x: event.clientX, y: event.clientY };
+    const origin = { x: box.x, y: box.y };
+    let moved = false;
+
+    try { el.setPointerCapture(event.pointerId); } catch {}
+
+    const onMove = (moveEvent: PointerEvent): void => {
+      const dx = (moveEvent.clientX - startClient.x) / this.transform.zoom;
+      const dy = (moveEvent.clientY - startClient.y) / this.transform.zoom;
+      if (!moved && Math.hypot(dx, dy) * this.transform.zoom < 4) {
+        return;
+      }
+      moved = true;
+      box.x = Math.round(origin.x + dx);
+      box.y = Math.round(origin.y + dy);
+      el.style.left = `${box.x}px`;
+      el.style.top = `${box.y}px`;
+    };
+
+    const onUp = (): void => {
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      this.interactionLock -= 1;
+      if (moved) {
+        this.host.setTextBoxes(this.host.getTextBoxes());
+        this.renderArrows();
+      }
+    };
+
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+  }
+
+  private onTextBoxResizePointerDown(event: PointerEvent, box: TextBox, el: HTMLElement): void {
+    if (event.button !== 0) {
+      return;
+    }
+    event.stopPropagation();
+
+    this.interactionLock += 1;
+    const startClient = { x: event.clientX, y: event.clientY };
+    const origin = { w: box.w, h: box.h };
+    let moved = false;
+
+    try { el.setPointerCapture(event.pointerId); } catch {}
+
+    const onMove = (moveEvent: PointerEvent): void => {
+      const dx = (moveEvent.clientX - startClient.x) / this.transform.zoom;
+      const dy = (moveEvent.clientY - startClient.y) / this.transform.zoom;
+      if (!moved && Math.hypot(dx, dy) * this.transform.zoom < 4) {
+        return;
+      }
+      moved = true;
+      box.w = Math.max(140, Math.round(origin.w + dx));
+      box.h = Math.max(60, Math.round(origin.h + dy));
+      el.style.width = `${box.w}px`;
+      el.style.height = `${box.h}px`;
+    };
+
+    const onUp = (): void => {
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      this.interactionLock -= 1;
+      if (moved) {
+        this.host.setTextBoxes(this.host.getTextBoxes());
+        this.renderArrows();
+      }
+    };
+
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+  }
+
+  private editTextBox(box: TextBox, textEl: HTMLElement): void {
+    if (this.editingTextBoxId) {
+      return;
+    }
+    this.editingTextBoxId = box.id;
+    textEl.setAttribute("contenteditable", "plaintext-only");
+    textEl.addClass("is-editing");
+    textEl.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(textEl);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    const commit = (): void => {
+      textEl.removeAttribute("contenteditable");
+      textEl.removeClass("is-editing");
+      textEl.removeEventListener("blur", commit);
+      this.editingTextBoxId = null;
+      const value = textEl.innerText.replace(/\u00a0/g, " ").trim();
+      if (value !== box.text) {
+        const boxes = this.host.getTextBoxes();
+        const target = boxes.find((entry) => entry.id === box.id);
+        if (target) {
+          target.text = value;
+          this.host.setTextBoxes(boxes);
+        }
+      }
+    };
+    textEl.addEventListener("blur", commit);
+    textEl.addEventListener("keydown", (event) => {
+      event.stopPropagation();
+      if (event.key === "Escape") {
+        textEl.blur();
+      }
+    });
+  }
+
+  private onTextBoxContextMenu(event: MouseEvent, box: TextBox, textEl: HTMLElement): void {
+    const menu = new Menu();
+    menu.addItem((item) =>
+      item
+        .setTitle("编辑文字")
+        .setIcon("pencil")
+        .onClick(() => this.editTextBox(box, textEl)),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("换颜色")
+        .setIcon("palette")
+        .onClick(() => {
+          const boxes = this.host.getTextBoxes();
+          const target = boxes.find((entry) => entry.id === box.id);
+          if (target) {
+            const index = GROUP_COLORS.indexOf(target.color);
+            target.color = GROUP_COLORS[(index + 1) % GROUP_COLORS.length];
+            this.host.setTextBoxes(boxes);
+          }
+          this.render();
+        }),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("从这里画箭头")
+        .setIcon("move-up-right")
+        .onClick(() => this.beginArrowDraft({ kind: "textbox", ref: box.id })),
+    );
+    menu.addSeparator();
+    menu.addItem((item) =>
+      item
+        .setTitle("删除文本框")
+        .setIcon("trash-2")
+        .onClick(() => this.removeTextBox(box.id)),
+    );
+    menu.showAtMouseEvent(event);
+  }
+
+  /** 箭头草稿模式：所有 pointerdown 处理器先问它，true=已消费。 */
+  private interceptArrowClick(event: PointerEvent): boolean {
+    if (this.pendingArrowStart) {
+      const ep = this.endpointFromEvent(event);
+      if (ep) {
+        this.arrowDraft = ep;
+        this.pendingArrowStart = false;
+        new Notice("再点击箭头终点（Esc 取消）", 2500);
+      }
+      return true;
+    }
+    if (this.arrowDraft) {
+      const ep = this.endpointFromEvent(event);
+      if (ep) {
+        this.addArrow(this.arrowDraft, ep);
+      }
+      this.cancelArrowDraft();
+      return true;
+    }
+    return false;
+  }
+
+  private endpointFromEvent(event: PointerEvent | MouseEvent): ArrowEndpoint | null {
+    const target = event.target as HTMLElement;
+    const icon = target.closest<HTMLElement>(".web-desk-icon");
+    if (icon) {
+      const path = icon.getAttribute("data-path");
+      return path ? { kind: "card", ref: path } : null;
+    }
+    const tb = target.closest<HTMLElement>(".web-desk-textbox");
+    if (tb) {
+      const id = tb.getAttribute("data-tb-id");
+      return id ? { kind: "textbox", ref: id } : null;
+    }
+    const group = target.closest<HTMLElement>(".web-desk-group");
+    if (group) {
+      const id = group.getAttribute("data-group-id");
+      return id ? { kind: "group", ref: id } : null;
+    }
+    if (target.closest(".web-desk-toolbar")) {
+      return null;
+    }
+    const point = this.clientToCanvas(event.clientX, event.clientY);
+    return { kind: "point", ref: `${Math.round(point.x)},${Math.round(point.y)}` };
+  }
+
+  private beginArrowDraft(from: ArrowEndpoint): void {
+    this.arrowDraft = from;
+    this.pendingArrowStart = false;
+    this.rootEl.style.cursor = "crosshair";
+    new Notice("点击箭头终点（Esc 取消）", 2500);
+  }
+
+  private beginArrowFromScratch(): void {
+    this.pendingArrowStart = true;
+    this.rootEl.style.cursor = "crosshair";
+    new Notice("点击箭头起点", 2500);
+  }
+
+  private cancelArrowDraft(): void {
+    this.arrowDraft = null;
+    this.pendingArrowStart = false;
+    this.rootEl.style.cursor = "";
+  }
+
+  private clearArrowSelection(): void {
+    if (this.selectedArrowId === null) {
+      return;
+    }
+    this.selectedArrowId = null;
+    this.renderArrows();
+  }
+
+  private pruneDanglingArrows(): void {
+    const arrows = this.host.getArrows();
+    const paths = new Set(this.cards.map((card) => card.path));
+    const tbIds = new Set(this.host.getTextBoxes().map((box) => box.id));
+    const groupIds = new Set(this.host.getGroups().map((group) => group.id));
+    const alive = (ep: ArrowEndpoint): boolean => {
+      if (ep.kind === "card") return paths.has(ep.ref);
+      if (ep.kind === "textbox") return tbIds.has(ep.ref);
+      if (ep.kind === "group") return groupIds.has(ep.ref);
+      return true;
+    };
+    const kept = arrows.filter((arrow) => alive(arrow.from) && alive(arrow.to));
+    if (kept.length !== arrows.length) {
+      this.host.setArrows(kept);
+    }
+  }
+
+  /** 公共 API：右键菜单与冒烟测试共用。 */
+  addTextBox(x: number, y: number, text = "双击编辑文本"): TextBox {
+    const boxes = this.host.getTextBoxes();
+    const box: TextBox = {
+      id: `t${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`,
+      text,
+      x: Math.round(x),
+      y: Math.round(y),
+      w: 260,
+      h: 120,
+      color: GROUP_COLORS[boxes.length % GROUP_COLORS.length],
+    };
+    boxes.push(box);
+    this.host.setTextBoxes(boxes);
+    this.render();
+    return box;
+  }
+
+  removeTextBox(id: string): void {
+    this.host.setTextBoxes(this.host.getTextBoxes().filter((box) => box.id !== id));
+    this.host.setArrows(
+      this.host.getArrows().filter((arrow) => arrow.from.ref !== id && arrow.to.ref !== id),
+    );
+    this.render();
+  }
+
+  addArrow(from: ArrowEndpoint, to: ArrowEndpoint, label = ""): Arrow {
+    const arrows = this.host.getArrows();
+    const dup = arrows.some(
+      (arrow) =>
+        (arrow.from.ref === from.ref && arrow.to.ref === to.ref) ||
+        (arrow.from.ref === to.ref && arrow.to.ref === from.ref),
+    );
+    if (dup) {
+      new Notice("这两个之间已经有箭头了");
+      return { id: "", from, to, label, color: "" };
+    }
+    const arrow: Arrow = {
+      id: `a${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`,
+      from,
+      to,
+      label,
+      color: "",
+    };
+    arrows.push(arrow);
+    this.host.setArrows(arrows);
+    this.renderArrows();
+    return arrow;
+  }
+
+  removeArrow(id: string): void {
+    this.host.setArrows(this.host.getArrows().filter((arrow) => arrow.id !== id));
+    if (this.selectedArrowId === id) {
+      this.selectedArrowId = null;
+    }
+    this.renderArrows();
+  }
+
   // ---------- 导入 ----------
 
   private async onDrop(event: DragEvent): Promise<void> {
@@ -1155,6 +1785,21 @@ function normalizeRect(a: Point, b: Point): Rect {
     w: Math.abs(b.x - a.x),
     h: Math.abs(b.y - a.y),
   };
+}
+
+/** 线段从 rect 中心指向 towards，求与矩形边框的交点（箭头端点裁剪）。 */
+function rectEdgePoint(rect: Rect, towards: Point): Point {
+  const cx = rect.x + rect.w / 2;
+  const cy = rect.y + rect.h / 2;
+  const dx = towards.x - cx;
+  const dy = towards.y - cy;
+  if (dx === 0 && dy === 0) {
+    return { x: cx, y: cy };
+  }
+  const sx = dx === 0 ? Infinity : rect.w / 2 / Math.abs(dx);
+  const sy = dy === 0 ? Infinity : rect.h / 2 / Math.abs(dy);
+  const scale = Math.min(sx, sy);
+  return { x: cx + dx * scale, y: cy + dy * scale };
 }
 
 function rectsIntersect(a: Rect, b: Rect): boolean {

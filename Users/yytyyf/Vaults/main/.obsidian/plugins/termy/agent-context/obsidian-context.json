@@ -1,22 +1,22 @@
 {
   "schemaVersion": 1,
   "source": "termy",
-  "updatedAt": "2026-08-21T13:23:35.454Z",
+  "updatedAt": "2026-08-21T14:23:42.339Z",
   "vaultRoot": "Users/yytyyf/Vaults/main",
   "workspaceFolders": [
     "Users/yytyyf/Vaults/main"
   ],
   "activeFile": {
-    "filePath": "/Users/yytyyf/projects/obsidian-web-desk/Users/yytyyf/Vaults/main/HomePage.md",
-    "vaultPath": "HomePage.md",
-    "fileUrl": "file:///Users/yytyyf/projects/obsidian-web-desk/Users/yytyyf/Vaults/main/HomePage.md",
+    "filePath": "/Users/yytyyf/projects/obsidian-web-desk/Users/yytyyf/Vaults/main/日记/2026.5毕业之前/2026.8.22.md",
+    "vaultPath": "日记/2026.5毕业之前/2026.8.22.md",
+    "fileUrl": "file:///Users/yytyyf/projects/obsidian-web-desk/Users/yytyyf/Vaults/main/%E6%97%A5%E8%AE%B0/2026.5%E6%AF%95%E4%B8%9A%E4%B9%8B%E5%89%8D/2026.8.22.md",
     "hasFocus": false
   },
   "openFiles": [
     {
-      "filePath": "/Users/yytyyf/projects/obsidian-web-desk/Users/yytyyf/Vaults/main/HomePage.md",
-      "vaultPath": "HomePage.md",
-      "fileUrl": "file:///Users/yytyyf/projects/obsidian-web-desk/Users/yytyyf/Vaults/main/HomePage.md",
+      "filePath": "/Users/yytyyf/projects/obsidian-web-desk/Users/yytyyf/Vaults/main/日记/2026.5毕业之前/2026.8.22.md",
+      "vaultPath": "日记/2026.5毕业之前/2026.8.22.md",
+      "fileUrl": "file:///Users/yytyyf/projects/obsidian-web-desk/Users/yytyyf/Vaults/main/%E6%97%A5%E8%AE%B0/2026.5%E6%AF%95%E4%B8%9A%E4%B9%8B%E5%89%8D/2026.8.22.md",
       "isActive": true
     }
   ],

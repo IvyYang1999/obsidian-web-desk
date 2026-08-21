@@ -11,6 +11,34 @@ export interface GroupBox {
   color: string;
 }
 
+/** 画布上的文本框（备注），存插件 data.json。 */
+export interface TextBox {
+  id: string;
+  text: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  color: string;
+}
+
+/** 箭头端点：card=md路径 / textbox·group=id / point="x,y"。 */
+export type ArrowEndpointKind = "card" | "textbox" | "group" | "point";
+
+export interface ArrowEndpoint {
+  kind: ArrowEndpointKind;
+  ref: string;
+}
+
+export interface Arrow {
+  id: string;
+  from: ArrowEndpoint;
+  to: ArrowEndpoint;
+  label: string;
+  /** 空 = 主题色；否则 GROUP_COLORS 之一。 */
+  color: string;
+}
+
 /** 画布平移/缩放状态，随 data.json 持久化。 */
 export interface CanvasTransform {
   panX: number;

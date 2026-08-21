@@ -64,7 +64,7 @@ export async function importUrlAsBookmark(
 ): Promise<ImportResult> {
   const url = normalizeUrlOrThrow(rawUrl);
   const route = classifyUrl(url);
-  const extracted = await extract(app, url, route);
+  const extracted = await extract(url, route);
   const file = await writeBookmarkNote(app, settings, url, extracted, options);
 
   if (extracted.warning) {
@@ -72,6 +72,28 @@ export async function importUrlAsBookmark(
   }
 
   return { file, warning: extracted.warning };
+}
+
+/** 嵌入画布用：只抓取元信息，不落盘建文件。 */
+export interface BookmarkMeta {
+  url: string;
+  title: string;
+  description: string;
+  author: string;
+  sourceLabel: string;
+}
+
+export async function fetchBookmarkMeta(rawUrl: string): Promise<BookmarkMeta> {
+  const url = normalizeUrlOrThrow(rawUrl);
+  const route = classifyUrl(url);
+  const extracted = await extract(url, route);
+  return {
+    url,
+    title: extracted.title,
+    description: extracted.description,
+    author: extracted.author,
+    sourceLabel: extracted.sourceLabel,
+  };
 }
 
 function normalizeUrlOrThrow(rawUrl: string): string {
@@ -99,7 +121,7 @@ function classifyUrl(url: string): Route {
   return { id: "article", label: "文章" };
 }
 
-async function extract(app: App, url: string, route: Route): Promise<ExtractedContent> {
+async function extract(url: string, route: Route): Promise<ExtractedContent> {
   if (route.id === "twitter") {
     return extractTweet(url);
   }

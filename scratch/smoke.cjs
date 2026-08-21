@@ -82,11 +82,26 @@ let PORT;
     }, 60000, 'vault window');
 
     console.log('page url:', page.url());
-    page.on('console', (m) => { const t = m.text(); if (t.length < 300) console.log('[console]', m.type(), t); });
+    const consoleBuf = [];
+    page.on('console', (m) => {
+      const t = m.text();
+      if (t.length < 400) console.log('[console]', m.type(), t);
+      if (m.type() === 'error' || m.type() === 'warning') consoleBuf.push(t.slice(0, 300));
+    });
     page.on('pageerror', (e) => console.log('[pageerror]', String(e).slice(0, 300)));
 
     await page.waitForFunction(() => window.app && app.workspace && app.workspace.layoutReady, null, { timeout: 60000 });
     console.log('layout ready');
+    // 修改监听：定位拖拽后的「神秘回写者」
+    await page.evaluate(() => {
+      window.__wdModLog = [];
+      app.vault.on('modify', (f) => {
+        const entry = { t: Date.now(), path: f.path };
+        window.__wdModLog.push(entry);
+        console.warn('[watch-modify]', f.path);
+      });
+      app.metadataCache.on('changed', (f) => console.warn('[watch-changed]', f.path));
+    });
 
     // 隔离实例首开 vault 弹「信任」弹窗，受限模式不加载社区插件——DOM 原生 click 信任按钮（带轮询）
     const trusted = await (async () => {
@@ -198,6 +213,110 @@ let PORT;
     console.log('STEP3b icon rect:', JSON.stringify(vis));
     if (!vis || !vis.visible) throw new Error('icon attached but NOT visible in viewport');
 
+    // STEP3c: 文本框与箭头（公共 API，同渲染管线）
+    const comps = await page.evaluate(async (fp) => {
+      const view = app.workspace.getLeavesOfType('web-desk-view')[0].view;
+      const tb = view.addTextBox(620, 260, '冒烟测试文本框');
+      const arrow = view.addArrow({ kind: 'card', ref: fp }, { kind: 'textbox', ref: tb.id });
+      await new Promise((r) => setTimeout(r, 300));
+      const out = {
+        tbEl: !!document.querySelector(`.web-desk-textbox[data-tb-id="${tb.id}"]`),
+        arrowPath: !!document.querySelector('.web-desk-arrow'),
+        arrowHit: !!document.querySelector('.web-desk-arrow-hit'),
+        arrowId: arrow.id,
+        tbId: tb.id,
+      };
+      // 清理（不留脏数据）
+      view.removeArrow(arrow.id);
+      view.removeTextBox(tb.id);
+      out.tbGone = !document.querySelector(`.web-desk-textbox[data-tb-id="${tb.id}"]`);
+      return out;
+    }, filePath);
+    console.log('STEP3c textbox+arrow:', JSON.stringify(comps));
+    if (!comps.tbEl || !comps.arrowPath || !comps.arrowHit || !comps.tbGone) throw new Error('textbox/arrow assertion failed');
+
+    // STEP3c2: 文本框真的能拖动（缺 position:absolute 时 left/top 不生效，V2 真机翻车点）
+    const tbMove = await page.evaluate(async () => {
+      const view = app.workspace.getLeavesOfType('web-desk-view')[0].view;
+      const tb = view.addTextBox(520, 380, '拖动测试');
+      await new Promise((r) => setTimeout(r, 200));
+      const el = document.querySelector(`.web-desk-textbox[data-tb-id="${tb.id}"]`);
+      const before = el.getAttribute('style');
+      const r = el.getBoundingClientRect();
+      const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+      const mk = (type, x, y) => el.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: 2, pointerType: 'mouse',
+        clientX: x, clientY: y, button: 0, buttons: 1, isPrimary: true,
+      }));
+      mk('pointerdown', cx, cy);
+      for (let i = 1; i <= 8; i++) mk('pointermove', cx + 120 * i / 8, cy + 60 * i / 8);
+      mk('pointerup', cx + 120, cy + 60);
+      await new Promise((res) => setTimeout(res, 900)); // 防抖500ms+写盘
+      const after = el.getAttribute('style');
+      const boxes = view.host.getTextBoxes();
+      const saved = boxes.find((b) => b.id === tb.id);
+      const out = { before, after, savedX: saved ? saved.x : null, moved: after !== before && saved && saved.x === 640 };
+      view.removeTextBox(tb.id);
+      return out;
+    });
+    console.log('STEP3c2 textbox draggable:', JSON.stringify(tbMove));
+    if (!tbMove.moved) throw new Error('textbox drag failed: ' + JSON.stringify(tbMove));
+
+    // STEP3d: 嵌入画布——建测试笔记，阅读模式渲染，合成 drop 导入，断言写回 md
+    const embedPath = await page.evaluate(async () => {
+      const content = ['# 嵌入画布冒烟', '', '```web-desk', JSON.stringify({ items: [] }), '```', ''].join('\n');
+      const old = app.vault.getAbstractFileByPath('webdesk-smoke-embed.md');
+      if (old) await app.vault.trash(old, false);
+      const f = await app.vault.create('webdesk-smoke-embed.md', content);
+      return f.path;
+    });
+    await page.evaluate(async (path) => {
+      await app.workspace.openLinkText(path, '', false);
+    }, embedPath);
+    const embedReady = await (async () => {
+      for (let i = 0; i < 15; i++) {
+        if (await page.evaluate(() => document.querySelectorAll('.web-desk-embed').length > 0)) return true;
+        await sleep(1000);
+      }
+      return false;
+    })();
+    if (!embedReady) throw new Error('embed canvas never rendered');
+    console.log('STEP3d-1 embed canvas rendered');
+
+    const dropResult = await page.evaluate(async () => {
+      const embed = document.querySelector('.web-desk-embed');
+      const r = embed.getBoundingClientRect();
+      const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+      const dt = new DataTransfer();
+      dt.setData('text/uri-list', 'https://example.com');
+      embed.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, dataTransfer: dt }));
+      // 等写回（防抖500ms+processing）
+      for (let i = 0; i < 15; i++) {
+        await new Promise((res) => setTimeout(res, 1000));
+        const f = app.vault.getAbstractFileByPath('webdesk-smoke-embed.md');
+        const text = await app.vault.cachedRead(f);
+        if (text.includes('https://example.com')) {
+          return { written: true, iconShown: !!document.querySelector('.web-desk-embed .web-desk-icon'), text };
+        }
+      }
+      const f = app.vault.getAbstractFileByPath('webdesk-smoke-embed.md');
+      return { written: false, text: await app.vault.cachedRead(f) };
+    });
+    console.log('STEP3d-2 drop writeback:', dropResult.written, 'iconShown:', dropResult.iconShown);
+    if (dropResult.written && !dropResult.iconShown) {
+      // 写回触发重渲染，图标应出现（重查一次）
+      await sleep(1500);
+      const shown = await page.evaluate(() => !!document.querySelector('.web-desk-embed .web-desk-icon'));
+      console.log('STEP3d-3 icon after rerender:', shown);
+    }
+    if (!dropResult.written) throw new Error('embed drop was not written back. block=' + dropResult.text.slice(0, 200));
+    // 清理测试笔记
+    await page.evaluate(async (path) => {
+      const f = app.vault.getAbstractFileByPath(path);
+      if (f) await app.vault.trash(f, false);
+    }, embedPath);
+    console.log('STEP3d-4 embed test cleaned');
+
     const readDesk = (fp) => page.evaluate(async (p) => {
       const f = app.vault.getAbstractFileByPath(p);
       const fm = app.metadataCache.getFileCache(f)?.frontmatter;
@@ -235,6 +354,16 @@ let PORT;
       return { styleAfter: el.getAttribute('style') };
     }, filePath);
     console.log('synthetic drag done:', JSON.stringify(dragResult));
+    // 时间线探针：drag 后多个时刻读磁盘，看 380 是否落盘/何时回退
+    for (const delay of [150, 500, 1200, 2500]) {
+      await sleep(delay === 150 ? 150 : delay - 150);
+      const probe = await page.evaluate(async (fp) => {
+        const text = await app.vault.adapter.read(fp);
+        const m = text.match(/^desk_x:\s*(\d+)/m);
+        return m ? m[1] : 'none';
+      }, filePath);
+      console.log(`t+${delay}ms disk desk_x:`, probe);
+    }
     await sleep(600);
     const after = await page.evaluate((fp) => ({
       style: document.querySelector(`.web-desk-icon[data-path="${fp}"]`)?.getAttribute('style'),
@@ -242,10 +371,30 @@ let PORT;
     }), filePath);
     console.log('after drag:', JSON.stringify(after));
     await sleep(1500);
-    const fm2 = await readDesk(filePath);
+    let fm2 = await readDesk(filePath);
+    if (fm2.desk_x === fm1.desk_x) {
+      // cache 可能滞后：等一拍再读
+      await sleep(2500);
+      fm2 = await readDesk(filePath);
+      if (fm2.desk_x === fm1.desk_x) {
+        const disk = await page.evaluate(async (fp) => {
+          const f = app.vault.getAbstractFileByPath(fp);
+          const text = await app.vault.adapter.read(f.path);
+          const m = text.match(/^desk_x:\s*(\d+)$/m);
+          return m ? Number(m[1]) : null;
+        }, filePath);
+        console.log('disk desk_x:', disk);
+        if (disk !== null) fm2 = { ...fm2, desk_x: disk };
+      }
+    }
     console.log('frontmatter after drag:', JSON.stringify({ x: fm2.desk_x, y: fm2.desk_y }));
     const moved = typeof fm2.desk_x === 'number' && Math.abs(fm2.desk_x - fm1.desk_x) > 100;
     console.log('STEP4 drag persisted:', moved);
+    if (!moved) {
+      const modlog = await page.evaluate(() => window.__wdModLog.filter((e) => e.path.startsWith('收藏夹/')));
+      console.log('MODIFY LOG (收藏夹):', JSON.stringify(modlog, null, 1));
+    }
+    if (!moved) console.log('CONSOLE ERRORS SO FAR:', JSON.stringify(consoleBuf, null, 1).slice(0, 2000));
 
     // 工具条存在
     const toolbar = await page.evaluate(() => !!document.querySelector('.web-desk-toolbar'));
