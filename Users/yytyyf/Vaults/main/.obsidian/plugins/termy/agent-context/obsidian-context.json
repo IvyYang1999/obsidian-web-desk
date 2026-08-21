@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "source": "termy",
+  "updatedAt": "2026-08-21T13:23:35.454Z",
+  "vaultRoot": "Users/yytyyf/Vaults/main",
+  "workspaceFolders": [
+    "Users/yytyyf/Vaults/main"
+  ],
+  "activeFile": {
+    "filePath": "/Users/yytyyf/projects/obsidian-web-desk/Users/yytyyf/Vaults/main/HomePage.md",
+    "vaultPath": "HomePage.md",
+    "fileUrl": "file:///Users/yytyyf/projects/obsidian-web-desk/Users/yytyyf/Vaults/main/HomePage.md",
+    "hasFocus": false
+  },
+  "openFiles": [
+    {
+      "filePath": "/Users/yytyyf/projects/obsidian-web-desk/Users/yytyyf/Vaults/main/HomePage.md",
+      "vaultPath": "HomePage.md",
+      "fileUrl": "file:///Users/yytyyf/projects/obsidian-web-desk/Users/yytyyf/Vaults/main/HomePage.md",
+      "isActive": true
+    }
+  ],
+  "selection": null
+}

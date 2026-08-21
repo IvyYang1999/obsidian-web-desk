@@ -29,8 +29,15 @@ let PORT;
   fs.rmSync('/tmp/obsidian-webdesk-smoke4', { recursive: true, force: true });
   fs.mkdirSync('/tmp/obsidian-webdesk-smoke4', { recursive: true });
   fs.copyFileSync(process.env.HOME + '/Library/Application Support/obsidian/obsidian.json', '/tmp/obsidian-webdesk-smoke4/obsidian.json');
-  // 启动前清掉上次测试残留（收藏夹文件夹整体删除，Obsidian 会在导入时自建）
-  fs.rmSync('/Users/yytyyf/Vaults/main/收藏夹', { recursive: true, force: true });
+  // 启动前只清 example.com 测试残留（收藏夹里可能有用户真实收藏，别碰）
+  const bmDir = '/Users/yytyyf/Vaults/main/收藏夹';
+  if (fs.existsSync(bmDir)) {
+    for (const f of fs.readdirSync(bmDir)) {
+      if (!f.endsWith('.md')) continue;
+      const full = bmDir + '/' + f;
+      if (fs.readFileSync(full, 'utf8').includes('https://example.com')) fs.unlinkSync(full);
+    }
+  }
   for (const f of fs.readdirSync(process.env.HOME + '/Library/Application Support/obsidian')) {
     if (/^[0-9a-f]{16}\.json$/.test(f)) {
       fs.copyFileSync(process.env.HOME + '/Library/Application Support/obsidian/' + f, '/tmp/obsidian-webdesk-smoke4/' + f);
@@ -179,6 +186,17 @@ let PORT;
     })();
     if (!iconReady) throw new Error('icon never appeared');
     console.log('STEP3 icon on canvas');
+    // 可见性断言：图标矩形必须与视口相交（V1 曾全部渲染在屏幕外而 DOM 仍在，漏检）
+    const vis = await page.evaluate((fp) => {
+      const root = document.querySelector('.web-desk-root').getBoundingClientRect();
+      const el = document.querySelector(`.web-desk-icon[data-path="${fp}"]`);
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: r.x, y: r.y, w: r.width, h: r.height, rootW: root.width, rootH: root.height,
+               visible: r.right > root.left && r.x < root.right && r.bottom > root.top && r.y < root.bottom };
+    }, filePath);
+    console.log('STEP3b icon rect:', JSON.stringify(vis));
+    if (!vis || !vis.visible) throw new Error('icon attached but NOT visible in viewport');
 
     const readDesk = (fp) => page.evaluate(async (p) => {
       const f = app.vault.getAbstractFileByPath(p);
@@ -235,12 +253,11 @@ let PORT;
 
     try { await page.screenshot({ path: '/Users/yytyyf/projects/obsidian-web-desk/scratch/smoke-1.png' }); } catch (e) { console.log('screenshot skipped:', e.message.slice(0, 50)); }
 
-    // 清理：收藏夹内全部测试文件移入回收站
-    await page.evaluate(async () => {
-      for (const f of app.vault.getMarkdownFiles().filter((f) => f.path.startsWith('收藏夹/'))) {
-        await app.vault.trash(f, false);
-      }
-    });
+    // 清理：只移除本次测试文件（example.com）
+    await page.evaluate(async (fp) => {
+      const f = app.vault.getAbstractFileByPath(fp);
+      if (f) await app.vault.trash(f, false);
+    }, filePath);
     await sleep(1200);
     const iconCount = await page.evaluate(() => document.querySelectorAll('.web-desk-icon').length);
     console.log('STEP6 cleanup, icon count after trash:', iconCount);

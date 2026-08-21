@@ -88,11 +88,10 @@ export class WebDeskView extends ItemView {
     this.rootEl = this.contentEl.createDiv({ cls: "web-desk-root" });
     this.rootEl.tabIndex = 0;
 
+    // 画布 div 锚在 (0,0)，只作 transform 容器；坐标空间以 (0,0) 为中心，
+    // 图标可为任意（含负）坐标，由 root 的 overflow:hidden 裁剪出视口。
+    // （V1 曾把 div 偏移 -BOUND 却没给图标坐标加偏移，导致所有图标渲染在屏幕外。）
     this.canvasEl = this.rootEl.createDiv({ cls: "web-desk-canvas" });
-    this.canvasEl.style.width = `${CANVAS_BOUND * 2}px`;
-    this.canvasEl.style.height = `${CANVAS_BOUND * 2}px`;
-    this.canvasEl.style.left = `${-CANVAS_BOUND}px`;
-    this.canvasEl.style.top = `${-CANVAS_BOUND}px`;
 
     this.marqueeEl = this.rootEl.createDiv({ cls: "web-desk-marquee" });
     this.marqueeEl.style.display = "none";
