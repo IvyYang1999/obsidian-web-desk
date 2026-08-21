@@ -1,10 +1,18 @@
 import { ItemView, Menu, Notice, TFile, WorkspaceLeaf } from "obsidian";
 import { importUrlAsBookmark } from "./importer";
+import {
+  imageFilesFrom,
+  imageFilesFromClipboard,
+  imageResourceUrl,
+  storeImageFile,
+} from "./image-storage";
+import { resizeImageToWidth } from "./image-state";
 import { planAutoPositions, readCard, writeDeskFields } from "./layout";
 import { applyRecentLayoutWrite, RecentLayoutWrite } from "./layout-state";
 import { ConfirmModal, TextInputModal } from "./modals";
 import {
   BookmarkCard,
+  CanvasImage,
   CANVAS_BOUND,
   CanvasTransform,
   Arrow,
@@ -28,6 +36,8 @@ export interface WebDeskHost {
   setTextBoxes(boxes: TextBox[]): void;
   getArrows(): Arrow[];
   setArrows(arrows: Arrow[]): void;
+  getImages(): CanvasImage[];
+  setImages(images: CanvasImage[]): void;
   getTransform(): CanvasTransform;
   setTransform(transform: CanvasTransform): void;
 }
@@ -120,7 +130,7 @@ export class WebDeskView extends ItemView {
     this.hintEl.createDiv({ cls: "web-desk-hint-title", text: "网页桌面" });
     this.hintEl.createDiv({
       cls: "web-desk-hint-body",
-      text: "把网页链接拖到这里收藏。右键画布可新建分组 / 文本框 / 箭头，右键图标可从它画箭头。",
+      text: "把网页链接或本地图片拖到这里；点击画布后也可直接粘贴剪贴板图片。",
     });
 
     const toolbar = this.rootEl.createDiv({ cls: "web-desk-toolbar" });
@@ -148,6 +158,7 @@ export class WebDeskView extends ItemView {
       event.stopPropagation();
       void this.onDrop(event);
     });
+    this.rootEl.addEventListener("paste", (event) => void this.onPaste(event));
 
     this.applyTransform();
   }
@@ -263,12 +274,14 @@ export class WebDeskView extends ItemView {
     for (const group of this.host.getGroups()) {
       this.renderGroup(group);
     }
+    this.renderImages();
     for (const card of this.cards) {
       this.renderIcon(card);
     }
     this.renderTextBoxes();
 
-    this.hintEl.style.display = this.cards.length === 0 ? "flex" : "none";
+    this.hintEl.style.display =
+      this.cards.length === 0 && this.host.getImages().length === 0 ? "flex" : "none";
     this.syncSelection();
   }
 
@@ -429,6 +442,10 @@ export class WebDeskView extends ItemView {
       expand(group.x, group.y);
       expand(group.x + group.w, group.y + group.h);
     }
+    for (const image of this.host.getImages()) {
+      expand(image.x, image.y);
+      expand(image.x + image.w, image.y + image.h);
+    }
 
     if (minX === Infinity) {
       this.transform = { panX: 0, panY: 0, zoom: 1 };
@@ -460,6 +477,7 @@ export class WebDeskView extends ItemView {
       event.button !== 0 ||
       target.closest(".web-desk-icon") ||
       target.closest(".web-desk-group") ||
+      target.closest(".web-desk-image") ||
       target.closest(".web-desk-textbox") ||
       target.closest(".web-desk-toolbar")
     ) {
@@ -556,7 +574,11 @@ export class WebDeskView extends ItemView {
 
   private onCanvasContextMenu(event: MouseEvent): void {
     const target = event.target as HTMLElement;
-    if (target.closest(".web-desk-icon") || target.closest(".web-desk-group")) {
+    if (
+      target.closest(".web-desk-icon") ||
+      target.closest(".web-desk-group") ||
+      target.closest(".web-desk-image")
+    ) {
       return;
     }
     event.preventDefault();
@@ -1371,6 +1393,130 @@ export class WebDeskView extends ItemView {
     }
   }
 
+  private renderImages(): void {
+    for (const image of this.host.getImages()) {
+      const el = this.canvasEl.createDiv({ cls: "web-desk-image" });
+      el.style.left = `${image.x}px`;
+      el.style.top = `${image.y}px`;
+      el.style.width = `${image.w}px`;
+      el.style.height = `${image.h}px`;
+      el.setAttribute("data-image-id", image.id);
+      el.setAttribute("aria-label", image.path);
+
+      const resource = imageResourceUrl(this.app, image.path);
+      if (resource) {
+        el.createEl("img", {
+          cls: "web-desk-image-content",
+          attr: { src: resource, alt: image.path.split("/").pop() ?? "画布图片", draggable: "false" },
+        });
+      } else {
+        el.addClass("is-missing");
+        el.createDiv({ cls: "web-desk-image-missing", text: "图片文件已移动或删除" });
+      }
+      const handle = el.createDiv({ cls: "web-desk-image-resize" });
+      el.addEventListener("pointerdown", (event) => this.onImagePointerDown(event, image, el));
+      el.addEventListener("contextmenu", (event) => this.onImageContextMenu(event, image));
+      handle.addEventListener("pointerdown", (event) =>
+        this.onImageResizePointerDown(event, image, el),
+      );
+    }
+  }
+
+  private onImagePointerDown(event: PointerEvent, image: CanvasImage, el: HTMLElement): void {
+    if (event.button !== 0 || (event.target as HTMLElement).closest(".web-desk-image-resize")) return;
+    event.stopPropagation();
+    this.rootEl.focus();
+    this.interactionLock += 1;
+    const start = { x: event.clientX, y: event.clientY };
+    const origin = { x: image.x, y: image.y };
+    let moved = false;
+    try { el.setPointerCapture(event.pointerId); } catch {}
+
+    const onMove = (moveEvent: PointerEvent): void => {
+      const dx = (moveEvent.clientX - start.x) / this.transform.zoom;
+      const dy = (moveEvent.clientY - start.y) / this.transform.zoom;
+      if (!moved && Math.hypot(dx, dy) * this.transform.zoom < 4) return;
+      moved = true;
+      image.x = Math.round(origin.x + dx);
+      image.y = Math.round(origin.y + dy);
+      el.style.left = `${image.x}px`;
+      el.style.top = `${image.y}px`;
+    };
+    const onUp = (): void => {
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
+      this.interactionLock -= 1;
+      if (moved) this.host.setImages(this.host.getImages());
+    };
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
+  }
+
+  private onImageResizePointerDown(
+    event: PointerEvent,
+    image: CanvasImage,
+    el: HTMLElement,
+  ): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.interactionLock += 1;
+    const start = { x: event.clientX, y: event.clientY };
+    const origin = { w: image.w, h: image.h };
+    let moved = false;
+    try { el.setPointerCapture(event.pointerId); } catch {}
+
+    const onMove = (moveEvent: PointerEvent): void => {
+      const dx = (moveEvent.clientX - start.x) / this.transform.zoom;
+      const dy = (moveEvent.clientY - start.y) / this.transform.zoom;
+      if (!moved && Math.hypot(dx, dy) * this.transform.zoom < 4) return;
+      moved = true;
+      const widthDelta = Math.abs(dx) >= Math.abs(dy * (origin.w / origin.h))
+        ? dx
+        : dy * (origin.w / origin.h);
+      const size = resizeImageToWidth(origin, origin.w + widthDelta);
+      image.w = size.w;
+      image.h = size.h;
+      el.style.width = `${image.w}px`;
+      el.style.height = `${image.h}px`;
+    };
+    const onUp = (): void => {
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
+      this.interactionLock -= 1;
+      if (moved) this.host.setImages(this.host.getImages());
+    };
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
+  }
+
+  private onImageContextMenu(event: MouseEvent, image: CanvasImage): void {
+    event.preventDefault();
+    event.stopPropagation();
+    const menu = new Menu();
+    menu.addItem((item) =>
+      item.setTitle("打开图片文件").setIcon("image").onClick(() => {
+        const file = this.app.vault.getAbstractFileByPath(image.path);
+        if (file instanceof TFile) void this.app.workspace.getLeaf("tab").openFile(file);
+      }),
+    );
+    menu.addSeparator();
+    menu.addItem((item) =>
+      item
+        .setTitle("移出画布（保留附件）")
+        .setIcon("image-minus")
+        .onClick(() => {
+          this.host.setImages(this.host.getImages().filter((entry) => entry.id !== image.id));
+          this.render();
+        }),
+    );
+    menu.showAtMouseEvent(event);
+  }
+
   private onTextBoxPointerDown(event: PointerEvent, box: TextBox, el: HTMLElement): void {
     if (this.interceptArrowClick(event)) {
       return;
@@ -1683,6 +1829,12 @@ export class WebDeskView extends ItemView {
   // ---------- 导入 ----------
 
   private async onDrop(event: DragEvent): Promise<void> {
+    const point = this.clientToCanvas(event.clientX, event.clientY);
+    const imageFiles = imageFilesFrom(event.dataTransfer?.files);
+    if (imageFiles.length > 0) {
+      await this.importImages(imageFiles, point);
+      return;
+    }
     const text =
       event.dataTransfer?.getData("text/uri-list") ||
       event.dataTransfer?.getData("text/plain") ||
@@ -1697,8 +1849,39 @@ export class WebDeskView extends ItemView {
       return;
     }
 
-    const point = this.clientToCanvas(event.clientX, event.clientY);
     await this.importUrls(urls, point);
+  }
+
+  private async onPaste(event: ClipboardEvent): Promise<void> {
+    const imageFiles = imageFilesFromClipboard(event.clipboardData);
+    if (imageFiles.length === 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    await this.importImages(imageFiles, this.visibleCenter());
+  }
+
+  private async importImages(files: File[], point: Point): Promise<void> {
+    this.interactionLock += 1;
+    const images = this.host.getImages();
+    try {
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        try {
+          const image = await storeImageFile(this.app, this.settings.imageFolder, file, {
+            x: point.x + index * 32,
+            y: point.y + index * 32,
+          });
+          images.push(image);
+          new Notice(`已插入图片：${image.path.split("/").pop() ?? image.path}`);
+        } catch (error) {
+          new Notice(`插入图片失败：${getErrorMessage(error)}`, 6000);
+        }
+      }
+      this.host.setImages(images);
+    } finally {
+      this.interactionLock -= 1;
+    }
+    this.render();
   }
 
   private async importUrls(urls: string[], point: Point): Promise<void> {

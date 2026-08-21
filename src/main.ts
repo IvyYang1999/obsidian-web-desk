@@ -1,9 +1,11 @@
-import { Notice, Plugin, WorkspaceLeaf } from "obsidian";
+import { Editor, Notice, Plugin, WorkspaceLeaf } from "obsidian";
 import { DeskEmbed } from "./embed";
+import { createEmptyEmbedBlock } from "./embed-state";
 import { TextInputModal } from "./modals";
 import { WebDeskSettingTab } from "./settings";
 import {
   Arrow,
+  CanvasImage,
   CanvasTransform,
   DEFAULT_SETTINGS,
   GroupBox,
@@ -19,6 +21,7 @@ interface WebDeskPluginData {
   groups?: GroupBox[];
   textboxes?: TextBox[];
   arrows?: Arrow[];
+  images?: CanvasImage[];
   view?: CanvasTransform;
 }
 
@@ -27,6 +30,7 @@ export default class WebDeskPlugin extends Plugin {
   private groups: GroupBox[] = [];
   private textBoxes: TextBox[] = [];
   private arrows: Arrow[] = [];
+  private images: CanvasImage[] = [];
   private viewTransform: CanvasTransform = { panX: 0, panY: 0, zoom: 1 };
   private saveDataTimer: number | null = null;
 
@@ -48,6 +52,11 @@ export default class WebDeskPlugin extends Plugin {
       getArrows: () => this.arrows,
       setArrows: (arrows) => {
         this.arrows = arrows;
+        this.saveDataDebounced();
+      },
+      getImages: () => this.images,
+      setImages: (images) => {
+        this.images = images;
         this.saveDataDebounced();
       },
       getTransform: () => this.viewTransform,
@@ -88,12 +97,29 @@ export default class WebDeskPlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: "insert-web-desk",
+      name: "插入网页收藏画布",
+      editorCallback: (editor) => this.insertEmbedCanvas(editor),
+    });
+
+    this.registerEvent(
+      this.app.workspace.on("editor-menu", (menu, editor) => {
+        menu.addItem((item) =>
+          item
+            .setTitle("插入网页收藏画布")
+            .setIcon("layout-grid")
+            .onClick(() => this.insertEmbedCanvas(editor)),
+        );
+      }),
+    );
+
     this.addSettingTab(new WebDeskSettingTab(this.app, this));
 
     // 笔记内嵌画布：```web-desk 代码块（数据存块内，编辑写回，oneday 同款姿势）
     this.registerMarkdownCodeBlockProcessor("web-desk", (source, el, ctx) => {
       try {
-        new DeskEmbed(el, source, this.app, ctx).render();
+        new DeskEmbed(el, source, this.app, ctx, this.settings).render();
       } catch (error) {
         el.createEl("pre", { text: `web-desk 画布渲染失败：${getErrorMessage(error)}` });
       }
@@ -112,6 +138,7 @@ export default class WebDeskPlugin extends Plugin {
     this.groups = Array.isArray(data?.groups) ? data!.groups! : [];
     this.textBoxes = Array.isArray(data?.textboxes) ? data!.textboxes! : [];
     this.arrows = Array.isArray(data?.arrows) ? data!.arrows! : [];
+    this.images = Array.isArray(data?.images) ? data!.images! : [];
     this.viewTransform = data?.view ?? { panX: 0, panY: 0, zoom: 1 };
   }
 
@@ -125,6 +152,7 @@ export default class WebDeskPlugin extends Plugin {
       groups: this.groups,
       textboxes: this.textBoxes,
       arrows: this.arrows,
+      images: this.images,
       view: this.viewTransform,
     };
   }
@@ -137,6 +165,13 @@ export default class WebDeskPlugin extends Plugin {
       this.saveDataTimer = null;
       void this.saveData(this.snapshot());
     }, 500);
+  }
+
+  private insertEmbedCanvas(editor: Editor): void {
+    const cursor = editor.getCursor();
+    const line = editor.getLine(cursor.line);
+    const prefix = line.trim() ? "\n" : "";
+    editor.replaceSelection(`${prefix}${createEmptyEmbedBlock()}\n`);
   }
 
   private getActiveView(): WebDeskView | null {

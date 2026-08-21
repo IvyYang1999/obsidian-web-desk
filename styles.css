@@ -1,4 +1,20 @@
 /* 网页桌面 · 画布 */
+.web-desk-view,
+.web-desk-embed-host,
+.web-desk-modal-buttons {
+  --wd-surface: var(--background-secondary);
+  --wd-border-color: var(--background-modifier-border);
+  --wd-radius-sm: 6px;
+  --wd-radius-md: 10px;
+  --wd-radius-lg: 14px;
+  --wd-space-1: 4px;
+  --wd-space-2: 8px;
+  --wd-space-3: 12px;
+  --wd-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.18);
+  --wd-shadow-md: 0 4px 14px rgba(0, 0, 0, 0.24);
+  --wd-motion-fast: 120ms ease;
+}
+
 .web-desk-view {
   padding: 0;
 }
@@ -10,7 +26,7 @@
   overflow: hidden;
   background-color: var(--background-primary);
   background-image:
-    radial-gradient(circle, var(--background-modifier-border) 1px, transparent 1px);
+    radial-gradient(circle, var(--wd-border-color) 1px, transparent 1px);
   background-size: 24px 24px;
   outline: none;
   user-select: none;
@@ -29,9 +45,9 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding: 4px;
-  border-radius: 10px;
+  gap: var(--wd-space-1);
+  padding: var(--wd-space-1);
+  border-radius: var(--wd-radius-md);
   cursor: grab;
   z-index: 10;
 }
@@ -44,22 +60,22 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background-color: var(--background-secondary);
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 14px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  background-color: var(--wd-surface);
+  border: 1px solid var(--wd-border-color);
+  border-radius: var(--wd-radius-lg);
+  box-shadow: var(--wd-shadow-sm);
   overflow: hidden;
-  transition: box-shadow 120ms ease, border-color 120ms ease;
+  transition: box-shadow var(--wd-motion-fast), border-color var(--wd-motion-fast);
 }
 
 .web-desk-icon:hover .web-desk-icon-thumb {
   border-color: var(--interactive-accent);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.24);
+  box-shadow: var(--wd-shadow-md);
 }
 
 .web-desk-icon.is-selected .web-desk-icon-thumb {
   border-color: var(--interactive-accent);
-  box-shadow: 0 0 0 3px var(--interactive-accent-hover), 0 4px 14px rgba(0, 0, 0, 0.24);
+  box-shadow: 0 0 0 3px var(--interactive-accent-hover), var(--wd-shadow-md);
 }
 
 .web-desk-icon-img {
@@ -77,7 +93,7 @@
   justify-content: center;
   color: #ffffff;
   font-weight: 700;
-  border-radius: 13px;
+  border-radius: var(--wd-radius-lg);
   pointer-events: none;
 }
 
@@ -99,7 +115,7 @@
 .web-desk-group {
   position: absolute;
   border: 2px dashed;
-  border-radius: 14px;
+  border-radius: var(--wd-radius-lg);
   z-index: 5;
 }
 
@@ -110,7 +126,7 @@
   font-weight: 600;
   cursor: grab;
   background-color: var(--background-primary);
-  border-radius: 6px;
+  border-radius: var(--wd-radius-sm);
   padding: 0 6px;
 }
 
@@ -118,7 +134,9 @@
   cursor: grabbing;
 }
 
-.web-desk-group-resize {
+.web-desk-group-resize,
+.web-desk-textbox-resize,
+.web-desk-image-resize {
   position: absolute;
   right: -6px;
   bottom: -6px;
@@ -127,7 +145,7 @@
   border-right: 3px solid;
   border-bottom: 3px solid;
   border-color: inherit;
-  border-bottom-right-radius: 8px;
+  border-bottom-right-radius: var(--wd-radius-sm);
   cursor: nwse-resize;
 }
 
@@ -149,13 +167,13 @@
   bottom: 14px;
   display: flex;
   align-items: center;
-  gap: 4px;
-  background-color: var(--background-secondary);
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 10px;
-  padding: 4px 8px;
+  gap: var(--wd-space-1);
+  background-color: var(--wd-surface);
+  border: 1px solid var(--wd-border-color);
+  border-radius: var(--wd-radius-md);
+  padding: var(--wd-space-1) var(--wd-space-2);
   z-index: 30;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--wd-shadow-sm);
 }
 
 .web-desk-tool-btn {
@@ -171,7 +189,7 @@
 .web-desk-tool-btn:hover {
   color: var(--text-normal);
   background-color: var(--background-modifier-hover);
-  border-radius: 6px;
+  border-radius: var(--wd-radius-sm);
 }
 
 .web-desk-zoom-label {
@@ -189,7 +207,7 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: var(--wd-space-2);
   color: var(--text-faint);
   pointer-events: none;
   z-index: 3;
@@ -210,18 +228,18 @@
 .web-desk-modal-buttons {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  margin-top: 12px;
+  gap: var(--wd-space-2);
+  margin-top: var(--wd-space-3);
 }
 
 /* 笔记内嵌画布 */
 .web-desk-embed {
   position: relative;
   overflow: hidden;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 12px;
-  background-color: var(--background-secondary);
-  background-image: radial-gradient(circle, var(--background-modifier-border) 1px, transparent 1px);
+  border: 1px solid var(--wd-border-color);
+  border-radius: var(--wd-radius-lg);
+  background-color: var(--wd-surface);
+  background-image: radial-gradient(circle, var(--wd-border-color) 1px, transparent 1px);
   background-size: 24px 24px;
   user-select: none;
   -webkit-user-select: none;
@@ -243,7 +261,7 @@
 .web-desk-textbox {
   position: absolute;
   border: 2px dashed;
-  border-radius: 10px;
+  border-radius: var(--wd-radius-md);
   z-index: 6;
 }
 
@@ -266,17 +284,51 @@
   overflow: auto;
 }
 
-.web-desk-textbox-resize {
+
+/* 画布图片 */
+.web-desk-image {
   position: absolute;
-  right: -6px;
-  bottom: -6px;
-  width: 16px;
-  height: 16px;
-  border-right: 3px solid;
-  border-bottom: 3px solid;
-  border-color: inherit;
-  border-bottom-right-radius: 8px;
-  cursor: nwse-resize;
+  z-index: 7;
+  border-color: var(--wd-border-color);
+  cursor: grab;
+}
+
+.web-desk-image:active {
+  cursor: grabbing;
+}
+
+.web-desk-image-content,
+.web-desk-image-missing {
+  display: block;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--wd-border-color);
+  border-radius: var(--wd-radius-md);
+  background-color: var(--wd-surface);
+  box-shadow: var(--wd-shadow-sm);
+  transition: box-shadow var(--wd-motion-fast), border-color var(--wd-motion-fast);
+}
+
+.web-desk-image-content {
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.web-desk-image:hover .web-desk-image-content,
+.web-desk-image:hover .web-desk-image-missing {
+  border-color: var(--interactive-accent);
+  box-shadow: var(--wd-shadow-md);
+}
+
+.web-desk-image-missing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--wd-space-3);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  text-align: center;
 }
 
 /* 主画布：箭头 */

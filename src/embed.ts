@@ -1,32 +1,16 @@
 import { App, Menu, Notice, TFile, debounce } from "obsidian";
+import { EmbedData, EmbedItem, EmbedTextBox, parseEmbedData } from "./embed-state";
+import {
+  imageFilesFrom,
+  imageFilesFromClipboard,
+  imageResourceUrl,
+  storeImageFile,
+} from "./image-storage";
+import { resizeImageToWidth } from "./image-state";
 import { fetchBookmarkMeta } from "./importer";
 import { GROUP_COLORS } from "./types";
+import type { CanvasImage, WebDeskSettings } from "./types";
 import { colorFromString, faviconUrl, getErrorMessage, isProbablyUrl } from "./util";
-
-/** 嵌入画布条目：自含数据（不依赖收藏夹文件），整个画布就是 md 的一个 code block。 */
-export interface EmbedItem {
-  url: string;
-  title: string;
-  description?: string;
-  x: number;
-  y: number;
-  size?: number;
-}
-
-interface EmbedData {
-  items: EmbedItem[];
-  textboxes?: EmbedTextBox[];
-}
-
-interface EmbedTextBox {
-  id: string;
-  text: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  color?: string;
-}
 
 interface EmbedCtxLike {
   sourcePath: string;
@@ -50,6 +34,7 @@ export class DeskEmbed {
   private readonly app: App;
   private readonly ctx: EmbedCtxLike;
   private readonly filePath: string;
+  private readonly settings: WebDeskSettings;
 
   private rootEl!: HTMLElement;
   private canvasEl!: HTMLElement;
@@ -62,11 +47,18 @@ export class DeskEmbed {
   private busy = false;
   private editing = false;
 
-  constructor(el: HTMLElement, source: string, app: App, ctx: EmbedCtxLike) {
+  constructor(
+    el: HTMLElement,
+    source: string,
+    app: App,
+    ctx: EmbedCtxLike,
+    settings: WebDeskSettings,
+  ) {
     this.el = el;
     this.app = app;
     this.ctx = ctx;
     this.filePath = ctx.sourcePath;
+    this.settings = settings;
     this.originalSource = source.trim();
     this.data = parseEmbedData(source);
   }
@@ -76,12 +68,16 @@ export class DeskEmbed {
     this.el.addClass("web-desk-embed-host");
 
     this.rootEl = this.el.createDiv({ cls: "web-desk-embed" });
+    this.rootEl.tabIndex = 0;
     this.rootEl.style.height = `${EMBED_HEIGHT}px`;
 
     this.canvasEl = this.rootEl.createDiv({ cls: "web-desk-canvas web-desk-embed-canvas" });
 
     this.hintEl = this.rootEl.createDiv({ cls: "web-desk-hint" });
-    this.hintEl.createDiv({ cls: "web-desk-hint-body", text: "把网页链接拖进来（右键可手动添加 / 新建文本框）" });
+    this.hintEl.createDiv({
+      cls: "web-desk-hint-body",
+      text: "把网页链接或本地图片拖进来，也可以直接粘贴剪贴板图片",
+    });
 
     const toolbar = this.rootEl.createDiv({ cls: "web-desk-toolbar" });
     const zoomOut = toolbar.createEl("button", { text: "－", cls: "web-desk-tool-btn" });
@@ -92,7 +88,7 @@ export class DeskEmbed {
 
     this.bindCanvasEvents();
     this.renderItems();
-    this.hintEl.style.display = this.data.items.length === 0 ? "flex" : "none";
+    this.updateHint();
     this.applyTransform();
   }
 
@@ -102,6 +98,9 @@ export class DeskEmbed {
     this.iconEls.clear();
     this.canvasEl.empty();
 
+    for (const image of this.data.images) {
+      this.renderImage(image);
+    }
     for (const box of this.data.textboxes ?? []) {
       this.renderTextBox(box);
     }
@@ -187,6 +186,132 @@ export class DeskEmbed {
     });
   }
 
+  private renderImage(image: CanvasImage): void {
+    const el = this.canvasEl.createDiv({ cls: "web-desk-image" });
+    el.style.left = `${image.x}px`;
+    el.style.top = `${image.y}px`;
+    el.style.width = `${image.w}px`;
+    el.style.height = `${image.h}px`;
+    el.setAttribute("data-image-id", image.id);
+    el.setAttribute("aria-label", image.path);
+    const resource = imageResourceUrl(this.app, image.path);
+    if (resource) {
+      el.createEl("img", {
+        cls: "web-desk-image-content",
+        attr: { src: resource, alt: image.path.split("/").pop() ?? "画布图片", draggable: "false" },
+      });
+    } else {
+      el.addClass("is-missing");
+      el.createDiv({ cls: "web-desk-image-missing", text: "图片文件已移动或删除" });
+    }
+    const handle = el.createDiv({ cls: "web-desk-image-resize" });
+    el.addEventListener("pointerdown", (event) => this.onImagePointerDown(event, image, el));
+    el.addEventListener("contextmenu", (event) => this.onImageContextMenu(event, image));
+    handle.addEventListener("pointerdown", (event) =>
+      this.onImageResizePointerDown(event, image, el),
+    );
+  }
+
+  private onImagePointerDown(event: PointerEvent, image: CanvasImage, el: HTMLElement): void {
+    if (
+      event.button !== 0 ||
+      this.editing ||
+      (event.target as HTMLElement).closest(".web-desk-image-resize")
+    ) return;
+    event.stopPropagation();
+    this.rootEl.focus();
+    const start = { x: event.clientX, y: event.clientY };
+    const origin = { x: image.x, y: image.y };
+    let moved = false;
+    try { el.setPointerCapture(event.pointerId); } catch {}
+    const onMove = (moveEvent: PointerEvent): void => {
+      const dx = (moveEvent.clientX - start.x) / this.zoom;
+      const dy = (moveEvent.clientY - start.y) / this.zoom;
+      if (!moved && Math.hypot(dx, dy) * this.zoom < 4) return;
+      moved = true;
+      image.x = Math.round(origin.x + dx);
+      image.y = Math.round(origin.y + dy);
+      el.style.left = `${image.x}px`;
+      el.style.top = `${image.y}px`;
+    };
+    const onUp = (): void => {
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
+      if (moved) this.scheduleWrite();
+    };
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
+  }
+
+  private onImageResizePointerDown(
+    event: PointerEvent,
+    image: CanvasImage,
+    el: HTMLElement,
+  ): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const start = { x: event.clientX, y: event.clientY };
+    const origin = { w: image.w, h: image.h };
+    let moved = false;
+    try { el.setPointerCapture(event.pointerId); } catch {}
+    const onMove = (moveEvent: PointerEvent): void => {
+      const dx = (moveEvent.clientX - start.x) / this.zoom;
+      const dy = (moveEvent.clientY - start.y) / this.zoom;
+      if (!moved && Math.hypot(dx, dy) * this.zoom < 4) return;
+      moved = true;
+      const widthDelta = Math.abs(dx) >= Math.abs(dy * (origin.w / origin.h))
+        ? dx
+        : dy * (origin.w / origin.h);
+      const size = resizeImageToWidth(origin, origin.w + widthDelta);
+      image.w = size.w;
+      image.h = size.h;
+      el.style.width = `${image.w}px`;
+      el.style.height = `${image.h}px`;
+    };
+    const onUp = (): void => {
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
+      if (moved) this.scheduleWrite();
+    };
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
+  }
+
+  private onImageContextMenu(event: MouseEvent, image: CanvasImage): void {
+    event.preventDefault();
+    event.stopPropagation();
+    const menu = new Menu();
+    menu.addItem((item) =>
+      item.setTitle("打开图片文件").setIcon("image").onClick(() => {
+        const file = this.app.vault.getAbstractFileByPath(image.path);
+        if (file instanceof TFile) void this.app.workspace.getLeaf("tab").openFile(file);
+      }),
+    );
+    menu.addSeparator();
+    menu.addItem((item) =>
+      item
+        .setTitle("移出画布（保留附件）")
+        .setIcon("image-minus")
+        .onClick(() => {
+          this.data.images = this.data.images.filter((entry) => entry.id !== image.id);
+          this.renderItems();
+          this.updateHint();
+          this.scheduleWrite();
+        }),
+    );
+    menu.showAtMouseEvent(event);
+  }
+
+  private updateHint(): void {
+    this.hintEl.style.display =
+      this.data.items.length === 0 && this.data.images.length === 0 ? "flex" : "none";
+  }
+
   // ---------- 交互 ----------
 
   private bindCanvasEvents(): void {
@@ -201,7 +326,13 @@ export class DeskEmbed {
     // 空白拖动 = 平移（不抢点击）
     this.rootEl.addEventListener("pointerdown", (event) => {
       const target = event.target as HTMLElement;
-      if (event.button !== 0 || target.closest(".web-desk-icon") || target.closest(".web-desk-textbox") || target.closest(".web-desk-toolbar")) {
+      if (
+        event.button !== 0 ||
+        target.closest(".web-desk-icon") ||
+        target.closest(".web-desk-image") ||
+        target.closest(".web-desk-textbox") ||
+        target.closest(".web-desk-toolbar")
+      ) {
         return;
       }
       const startX = event.clientX;
@@ -235,10 +366,15 @@ export class DeskEmbed {
       event.stopPropagation();
       void this.onDrop(event);
     });
+    this.rootEl.addEventListener("paste", (event) => void this.onPaste(event));
 
     this.rootEl.addEventListener("contextmenu", (event) => {
       const target = event.target as HTMLElement;
-      if (target.closest(".web-desk-icon") || target.closest(".web-desk-textbox")) return;
+      if (
+        target.closest(".web-desk-icon") ||
+        target.closest(".web-desk-image") ||
+        target.closest(".web-desk-textbox")
+      ) return;
       event.preventDefault();
       const menu = new Menu();
       menu.addItem((m) =>
@@ -304,7 +440,7 @@ export class DeskEmbed {
     menu.addItem((m) => m.setTitle("删除条目").setIcon("trash-2").onClick(() => {
       this.data.items = this.data.items.filter((entry) => entry !== item);
       this.renderItems();
-      this.hintEl.style.display = this.data.items.length === 0 ? "flex" : "none";
+      this.updateHint();
       this.scheduleWrite();
     }));
     menu.showAtMouseEvent(event);
@@ -404,6 +540,12 @@ export class DeskEmbed {
   // ---------- 导入 ----------
 
   private async onDrop(event: DragEvent): Promise<void> {
+    const point = this.clientToCanvas(event.clientX, event.clientY);
+    const imageFiles = imageFilesFrom(event.dataTransfer?.files);
+    if (imageFiles.length > 0) {
+      await this.importImages(imageFiles, point);
+      return;
+    }
     const text =
       event.dataTransfer?.getData("text/uri-list") ||
       event.dataTransfer?.getData("text/plain") ||
@@ -413,10 +555,35 @@ export class DeskEmbed {
       new Notice("没有识别到 http(s) 链接");
       return;
     }
-    const point = this.clientToCanvas(event.clientX, event.clientY);
     for (const url of urls) await this.addUrl(url, point, true);
     this.renderItems();
-    this.hintEl.style.display = this.data.items.length === 0 ? "flex" : "none";
+    this.updateHint();
+    this.scheduleWrite();
+  }
+
+  private async onPaste(event: ClipboardEvent): Promise<void> {
+    const imageFiles = imageFilesFromClipboard(event.clipboardData);
+    if (imageFiles.length === 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    await this.importImages(imageFiles, this.visibleCenter());
+  }
+
+  private async importImages(files: File[], point: { x: number; y: number }): Promise<void> {
+    for (let index = 0; index < files.length; index += 1) {
+      try {
+        const image = await storeImageFile(this.app, this.settings.imageFolder, files[index], {
+          x: point.x + index * 32,
+          y: point.y + index * 32,
+        });
+        this.data.images.push(image);
+        new Notice(`已插入图片：${image.path.split("/").pop() ?? image.path}`);
+      } catch (error) {
+        new Notice(`插入图片失败：${getErrorMessage(error)}`, 6000);
+      }
+    }
+    this.renderItems();
+    this.updateHint();
     this.scheduleWrite();
   }
 
@@ -440,7 +607,7 @@ export class DeskEmbed {
       });
       if (!quiet) {
         this.renderItems();
-        this.hintEl.style.display = this.data.items.length === 0 ? "flex" : "none";
+        this.updateHint();
         this.scheduleWrite();
       }
     } catch (error) {
@@ -503,20 +670,6 @@ export class DeskEmbed {
       new Notice(`写回画布失败：${getErrorMessage(error)}`, 5000);
     }
   }
-}
-
-function parseEmbedData(source: string): EmbedData {
-  const trimmed = source.trim();
-  if (!trimmed) return { items: [] };
-  try {
-    const parsed = JSON.parse(trimmed) as EmbedData;
-    if (Array.isArray(parsed?.items)) {
-      return { items: parsed.items, textboxes: parsed.textboxes };
-    }
-  } catch {
-    // 容错：坏数据当空画布，别让整个笔记渲染崩
-  }
-  return { items: [] };
 }
 
 function rgba(hex: string, alpha: number): string {

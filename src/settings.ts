@@ -46,5 +46,18 @@ export class WebDeskSettingTab extends PluginSettingTab {
             }
           }),
       );
+
+    new Setting(containerEl)
+      .setName("画布图片附件文件夹")
+      .setDesc("拖入或粘贴的图片会复制到这个 Vault 文件夹；移出画布不会删除附件原文件。")
+      .addText((text) =>
+        text
+          .setPlaceholder("附件/网页桌面")
+          .setValue(this.plugin.settings.imageFolder)
+          .onChange(async (value) => {
+            this.plugin.settings.imageFolder = value.trim() || "附件/网页桌面";
+            await this.plugin.saveSettings();
+          }),
+      );
   }
 }

@@ -22,6 +22,16 @@ export interface TextBox {
   color: string;
 }
 
+/** 画布图片：文件本体在 Vault，这里只保存相对路径与布局。 */
+export interface CanvasImage {
+  id: string;
+  path: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 /** 箭头端点：card=md路径 / textbox·group=id / point="x,y"。 */
 export type ArrowEndpointKind = "card" | "textbox" | "group" | "point";
 
@@ -48,11 +58,13 @@ export interface CanvasTransform {
 
 export interface WebDeskSettings {
   bookmarkFolder: string;
+  imageFolder: string;
   defaultIconSize: number;
 }
 
 export const DEFAULT_SETTINGS: WebDeskSettings = {
   bookmarkFolder: "收藏夹",
+  imageFolder: "附件/网页桌面",
   defaultIconSize: 96,
 };
 
