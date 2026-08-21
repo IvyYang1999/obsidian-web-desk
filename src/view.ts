@@ -1,6 +1,7 @@
 import { ItemView, Menu, Notice, TFile, WorkspaceLeaf } from "obsidian";
 import { importUrlAsBookmark } from "./importer";
 import { planAutoPositions, readCard, writeDeskFields } from "./layout";
+import { applyRecentLayoutWrite, RecentLayoutWrite } from "./layout-state";
 import { ConfirmModal, TextInputModal } from "./modals";
 import {
   BookmarkCard,
@@ -66,7 +67,7 @@ export class WebDeskView extends ItemView {
   /** >0 表示有交互进行中（拖拽/导入），推迟重绘。 */
   private interactionLock = 0;
   /** 近期本地写回的坐标（path → x/y/时刻）：metadataCache 滞后窗口内以本地为准，防视觉回跳。 */
-  private layoutWrites = new Map<string, { x: number; y: number; at: number }>();
+  private layoutWrites = new Map<string, RecentLayoutWrite>();
   private refreshTimer: number | null = null;
   private autoPlaceRunning = false;
 
@@ -178,13 +179,8 @@ export class WebDeskView extends ItemView {
     for (const card of this.cards) {
       const write = this.layoutWrites.get(card.path);
       if (!write) continue;
-      if (now - write.at > 10_000) {
+      if (applyRecentLayoutWrite(card, write, now) === "expired") {
         this.layoutWrites.delete(card.path);
-        continue;
-      }
-      if (card.x !== write.x || card.y !== write.y) {
-        card.x = write.x;
-        card.y = write.y;
       }
     }
 
@@ -655,6 +651,7 @@ export class WebDeskView extends ItemView {
       );
 
     if (dragged.length === 0) {
+      this.interactionLock -= 1;
       return;
     }
 
@@ -711,7 +708,6 @@ export class WebDeskView extends ItemView {
     try {
       for (const card of cards) {
         const file = this.app.vault.getAbstractFileByPath(card.path);
-        console.warn("[webdesk] persistDragged", card.path, "file=", file ? "TFile" : String(file), "->", Math.round(card.x), Math.round(card.y));
         if (!(file instanceof TFile)) {
           continue;
         }
@@ -726,7 +722,6 @@ export class WebDeskView extends ItemView {
           group: group || null,
         });
         this.layoutWrites.set(card.path, { x: card.x, y: card.y, at: Date.now() });
-        console.warn("[webdesk] writeDeskFields done", card.path, "disk-now=", (await this.app.vault.adapter.read(card.path)).match(/^desk_x:.*$/m)?.[0]);
       }
     } catch (error) {
       new Notice(`保存位置失败：${getErrorMessage(error)}`, 5000);

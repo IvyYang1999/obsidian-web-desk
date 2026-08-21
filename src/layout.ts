@@ -1,4 +1,5 @@
 import { App, TFile } from "obsidian";
+import { applyDeskPatch, DeskPatch } from "./layout-state";
 import { BookmarkCard } from "./types";
 
 /** 图标容器宽度（含留白），自动排布网格用。 */
@@ -54,13 +55,6 @@ function readNumber(value: unknown): number | null {
   return null;
 }
 
-export interface DeskPatch {
-  x?: number | null;
-  y?: number | null;
-  size?: number | null;
-  group?: string | null;
-}
-
 /** 写布局字段到 md frontmatter；值为 null 表示删除该键。 */
 export async function writeDeskFields(
   app: App,
@@ -68,23 +62,8 @@ export async function writeDeskFields(
   patch: DeskPatch,
 ): Promise<void> {
   await app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
-    assign(fm, "desk_x", patch.x);
-    assign(fm, "desk_y", patch.y);
-    assign(fm, "desk_size", patch.size);
-    assign(fm, "desk_group", patch.group);
+    applyDeskPatch(fm, patch);
   });
-}
-
-function assign(fm: Record<string, unknown>, key: string, value: number | string | null | undefined): void {
-  if (value === null || value === undefined) {
-    delete fm[key];
-    return;
-  }
-  if (typeof value === "number") {
-    fm[key] = Math.round(value);
-  } else {
-    fm[key] = value;
-  }
 }
 
 /**
