@@ -1,0 +1,9 @@
+{
+  "id": "web-desk",
+  "name": "网页桌面",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "自由画布收藏夹：把链接丢进画布，自动转成 Markdown，像整理电脑桌面一样拖拽归类。",
+  "author": "yyt",
+  "isDesktopOnly": false
+}
