@@ -23,6 +23,7 @@ const imageState = loadTypeScript("src/image-state.ts");
 const embedState = loadTypeScript("src/embed-state.ts");
 const clipboardState = loadTypeScript("src/clipboard-state.ts");
 const canvasState = loadTypeScript("src/canvas-state.ts");
+const embedWriteState = loadTypeScript("src/embed-write-state.ts");
 
 test("横图插入画布时按默认边界等比例缩小", () => {
   assert.deepEqual(imageState.fitImageWithin(1200, 800), { w: 360, h: 240 });
@@ -153,6 +154,29 @@ test("文内分组可用共享工厂围绕点击点创建紧凑尺寸", () => {
     }),
     { id: "g1", name: "资料", x: 120, y: 100, w: 360, h: 240, color: "#7aa2f7" },
   );
+});
+
+test("文内画布连续写回会用上一次成功内容作为下一次定位标记", () => {
+  const original = '{"items":[]}';
+  const first = '{"items":[],"groups":[{"x":10,"y":20}]}';
+  const second = '{"items":[],"groups":[{"x":30,"y":40}]}';
+
+  const firstWrite = embedWriteState.replaceEmbedMarker(`before\n${original}\nafter`, original, first);
+  assert.equal(firstWrite.replaced, true);
+  assert.equal(firstWrite.marker, first);
+
+  const secondWrite = embedWriteState.replaceEmbedMarker(firstWrite.content, firstWrite.marker, second);
+  assert.equal(secondWrite.replaced, true);
+  assert.match(secondWrite.content, /"x":30,"y":40/);
+  assert.doesNotMatch(secondWrite.content, /"x":10,"y":20/);
+});
+
+test("空代码块定位标记不会把画布 JSON 插到笔记开头", () => {
+  const content = "# 正文\n\n```web-desk\n```";
+  const result = embedWriteState.replaceEmbedMarker(content, "", '{"items":[]}');
+  assert.equal(result.replaced, false);
+  assert.equal(result.alreadyCurrent, false);
+  assert.equal(result.content, content);
 });
 
 test("内嵌画布新链接避开已有卡片、图片和文本框", () => {

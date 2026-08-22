@@ -1,4 +1,4 @@
-import { App, Menu, Notice, TFile, debounce } from "obsidian";
+import { App, Menu, Notice, TFile } from "obsidian";
 import {
   EmbedData,
   EmbedItem,
@@ -19,6 +19,7 @@ import {
   splitCanvasPaste,
 } from "./clipboard-state";
 import { resizeImageToWidth } from "./image-state";
+import { replaceEmbedMarker } from "./embed-write-state";
 import { normalizeRatingValue, ratingLinkState } from "./rating-state";
 import { fetchBookmarkMeta } from "./importer";
 import { TextInputModal } from "./modals";
@@ -65,8 +66,8 @@ let pendingEmbedFocus: { key: string; expiresAt: number } | null = null;
  */
 export class DeskEmbed {
   private data: EmbedData;
-  /** 渲染时块里的原始内容（写回兜底用它定位要替换的块，而不是用新序列化去匹配）。 */
-  private readonly originalSource: string;
+  /** 上一次成功写入的块内容；兜底写回用它定位，成功后随即前移。 */
+  private sourceMarker: string;
   private readonly el: HTMLElement;
   private readonly app: App;
   private readonly ctx: EmbedCtxLike;
@@ -90,6 +91,8 @@ export class DeskEmbed {
   private panY = 0;
   private busy = false;
   private editing = false;
+  /** 所有块写入严格串行，旧提交不能晚于新提交落盘。 */
+  private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(
     el: HTMLElement,
@@ -103,7 +106,7 @@ export class DeskEmbed {
     this.ctx = ctx;
     this.filePath = ctx.sourcePath;
     this.settings = settings;
-    this.originalSource = source.trim();
+    this.sourceMarker = source.trim();
     this.data = parseEmbedData(source);
   }
 
@@ -1376,9 +1379,20 @@ export class DeskEmbed {
     return JSON.stringify(this.data, null, 1);
   }
 
-  private scheduleWrite = debounce(() => void this.writeBack(), 500);
+  /**
+   * 调用点都位于点击、拖拽结束或批量导入完成等提交边界，无需再次 debounce。
+   * 立即入队可在 Obsidian 重渲染旧块之前把权威坐标写进编辑器/文件。
+   */
+  private scheduleWrite(): void {
+    const fresh = this.serialize();
+    this.writeQueue = this.writeQueue
+      .then(() => this.writeBack(fresh))
+      .catch((error) => {
+        new Notice(`写回画布失败：${getErrorMessage(error)}`, 5000);
+      });
+  }
 
-  private async writeBack(): Promise<void> {
+  private async writeBack(fresh: string): Promise<void> {
     const file = this.app.vault.getAbstractFileByPath(this.filePath);
     if (!(file instanceof TFile)) return;
 
@@ -1394,24 +1408,22 @@ export class DeskEmbed {
       const editor = leafEl?.view?.editor;
       if (editor) {
         const to = { line: info.lineEnd, ch: editor.getLine(info.lineEnd).length };
-        editor.replaceRange(this.serialize(), { line: info.lineStart, ch: 0 }, to);
+        editor.replaceRange(fresh, { line: info.lineStart, ch: 0 }, to);
+        this.sourceMarker = fresh;
         return;
       }
     }
 
-    // 兜底：全文按「渲染时的原始块内容」定位替换（LP 下 getSectionInfo 常为 null，此路径保命）
-    const fresh = this.serialize();
-    const marker = this.originalSource;
-    try {
-      await this.app.vault.process(file, (content) => {
-        const index = content.indexOf(marker);
-        if (index === -1) return content;
-        // 只替换首次出现的这个块（同名块内容相同，替换任何一个等价）
-        return content.slice(0, index) + fresh + content.slice(index + marker.length);
-      });
-    } catch (error) {
-      new Notice(`写回画布失败：${getErrorMessage(error)}`, 5000);
+    // 兜底：用上一次成功内容做 compare-and-replace，外部已改动时拒绝覆盖。
+    let outcome = replaceEmbedMarker("", this.sourceMarker, fresh);
+    await this.app.vault.process(file, (content) => {
+      outcome = replaceEmbedMarker(content, this.sourceMarker, fresh);
+      return outcome.content;
+    });
+    if (!outcome.replaced && !outcome.alreadyCurrent) {
+      throw new Error("代码块已在别处变化；为避免覆盖，已拒绝旧画布写回");
     }
+    this.sourceMarker = outcome.marker;
   }
 }
 
