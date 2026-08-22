@@ -123,6 +123,31 @@
   pointer-events: none;
 }
 
+.web-desk-file-thumb {
+  color: var(--text-muted);
+  background-color: var(--background-primary-alt);
+}
+
+.web-desk-file-icon {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.web-desk-file-icon svg {
+  width: 52%;
+  height: 52%;
+  stroke-width: 1.6;
+}
+
+.web-desk-icon.is-file-missing .web-desk-file-thumb {
+  border-style: dashed;
+  opacity: 0.72;
+}
+
 .web-desk-icon-letter {
   width: 100%;
   height: 100%;

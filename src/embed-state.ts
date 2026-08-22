@@ -3,6 +3,8 @@ import type { CanvasComponents, TextBox } from "./types";
 
 export interface EmbedItem {
   url: string;
+  /** Vault 内 Markdown 路径；存在时该条目是文件卡片，url 保持空字符串。 */
+  path?: string;
   title: string;
   description?: string;
   x: number;
@@ -10,6 +12,10 @@ export interface EmbedItem {
   size?: number;
   group?: string;
   objectGroup?: string;
+}
+
+export function embedItemRef(item: Pick<EmbedItem, "url" | "path">): string {
+  return item.path ? `file:${item.path}` : item.url;
 }
 
 export type EmbedTextBox = TextBox;

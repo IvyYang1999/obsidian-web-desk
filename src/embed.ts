@@ -1,8 +1,9 @@
-import { App, Menu, Notice, TFile } from "obsidian";
+import { App, Menu, Notice, setIcon, TFile } from "obsidian";
 import {
   EmbedData,
   EmbedItem,
   EmbedTextBox,
+  embedItemRef,
   MAX_EMBED_HEIGHT,
   MIN_EMBED_HEIGHT,
   findAvailableEmbedItemPosition,
@@ -10,6 +11,8 @@ import {
   normalizeEmbedHeight,
   parseEmbedData,
 } from "./embed-state";
+import { extractEmbeddedMarkdownPaths } from "./file-link-state";
+import { markdownFilesFromDrop } from "./file-link-storage";
 import {
   imageFilesFrom,
   imageFilesFromClipboard,
@@ -242,7 +245,15 @@ export class DeskEmbed {
 
     let host = "";
     try { host = new URL(item.url).hostname.replace(/^www\./, ""); } catch { host = ""; }
-    if (host) {
+    if (item.path) {
+      el.addClass("is-file-link");
+      thumb.addClass("web-desk-file-thumb");
+      const icon = thumb.createDiv({ cls: "web-desk-file-icon" });
+      setIcon(icon, "file-text");
+      if (!(this.app.vault.getAbstractFileByPath(item.path) instanceof TFile)) {
+        el.addClass("is-file-missing");
+      }
+    } else if (host) {
       const img = thumb.createEl("img", {
         cls: "web-desk-icon-img",
         attr: { src: faviconUrl(host), alt: host, draggable: "false" },
@@ -259,11 +270,14 @@ export class DeskEmbed {
     const handle = el.createDiv({ cls: "web-desk-icon-resize" });
     handle.style.top = `${size - 4}px`;
     el.setAttribute("data-embed-index", String(index));
-    el.setAttribute("data-card-ref", item.url);
-    el.setAttribute("aria-label", `${item.title}\n${item.url}`);
+    el.setAttribute("data-card-ref", embedItemRef(item));
+    el.setAttribute("aria-label", `${item.title}\n${item.path || item.url}`);
 
     el.addEventListener("pointerdown", (event) => this.onItemPointerDown(event, item, el));
     el.addEventListener("contextmenu", (event) => this.onItemContextMenu(event, item));
+    if (item.path) {
+      el.addEventListener("mouseover", (event) => this.triggerFileHover(event, el, item.path!));
+    }
     handle.addEventListener("pointerdown", (event) => this.onItemResizePointerDown(event, item, el));
 
     this.iconEls.set(index, el);
@@ -272,7 +286,7 @@ export class DeskEmbed {
   private appendLetter(thumb: HTMLElement, item: EmbedItem, size: number): void {
     const letter = item.title.trim().charAt(0).toUpperCase() || "?";
     const block = thumb.createDiv({ cls: "web-desk-icon-letter", text: letter });
-    block.style.backgroundColor = colorFromString(item.url);
+    block.style.backgroundColor = colorFromString(item.path || item.url);
     block.style.fontSize = `${Math.round(size * 0.42)}px`;
   }
 
@@ -281,9 +295,9 @@ export class DeskEmbed {
       ...this.data.items.map((item) => {
         const size = item.size ?? 96;
         return {
-          key: item.url,
+          key: embedItemRef(item),
           kind: "card" as const,
-          id: item.url,
+          id: embedItemRef(item),
           objectGroup: item.objectGroup ?? "",
           x: item.x,
           y: item.y,
@@ -366,7 +380,7 @@ export class DeskEmbed {
 
   private embedObjectElement(object: EmbedViewObject): HTMLElement | undefined {
     if (object.kind === "card") {
-      const index = this.data.items.findIndex((item) => item.url === object.id);
+      const index = this.data.items.findIndex((item) => embedItemRef(item) === object.id);
       return this.iconEls.get(index);
     }
     if (object.kind === "image") return this.imageEls.get(object.id);
@@ -377,9 +391,9 @@ export class DeskEmbed {
   private applyEmbedObjectPosition(key: string, x: number, y: number): void {
     const parsed = splitObjectKey(key);
     if (!parsed) {
-      const item = this.data.items.find((entry) => entry.url === key);
+      const item = this.data.items.find((entry) => embedItemRef(entry) === key);
       if (item) { item.x = x; item.y = y; }
-      const index = this.data.items.findIndex((entry) => entry.url === key);
+      const index = this.data.items.findIndex((entry) => embedItemRef(entry) === key);
       const el = this.iconEls.get(index);
       if (el) { el.style.left = `${x}px`; el.style.top = `${y}px`; }
       return;
@@ -401,10 +415,10 @@ export class DeskEmbed {
   private applyEmbedObjectScale(origin: EmbedViewObject, x: number, y: number, scale: number): void {
     this.applyEmbedObjectPosition(origin.key, x, y);
     if (origin.kind === "card") {
-      const item = this.data.items.find((entry) => entry.url === origin.id);
+      const item = this.data.items.find((entry) => embedItemRef(entry) === origin.id);
       if (!item) return;
       item.size = Math.min(320, Math.max(32, Math.round((origin.w - 24) * scale)));
-      const index = this.data.items.findIndex((entry) => entry.url === origin.id);
+      const index = this.data.items.findIndex((entry) => embedItemRef(entry) === origin.id);
       const el = this.iconEls.get(index);
       if (el) updateEmbedIconElementSize(el, item.size);
       return;
@@ -435,7 +449,7 @@ export class DeskEmbed {
   }
 
   private syncObjectSelection(): void {
-    this.data.items.forEach((item, index) => this.iconEls.get(index)?.toggleClass("is-selected", this.selectedObjects.has(item.url)));
+    this.data.items.forEach((item, index) => this.iconEls.get(index)?.toggleClass("is-selected", this.selectedObjects.has(embedItemRef(item))));
     for (const [id, el] of this.imageEls) el.toggleClass("is-selected", this.selectedObjects.has(objectKey("image", id)));
     for (const [id, el] of this.textBoxEls) el.toggleClass("is-selected", this.selectedObjects.has(objectKey("textbox", id)));
     for (const [id, el] of this.ratingEls) el.toggleClass("is-selected", this.selectedObjects.has(objectKey("rating", id)));
@@ -514,7 +528,7 @@ export class DeskEmbed {
     }
     for (const object of objects) {
       if (object.kind === "card") {
-        const item = this.data.items.find((entry) => entry.url === object.id);
+        const item = this.data.items.find((entry) => embedItemRef(entry) === object.id);
         if (item) item.objectGroup = groupId || undefined;
       } else if (object.kind === "image") {
         const image = this.data.images.find((entry) => entry.id === object.id);
@@ -587,12 +601,12 @@ export class DeskEmbed {
   }
 
   private renderRatings(): void {
-    const available = new Set(this.data.items.map((item) => item.url));
+    const available = new Set(this.data.items.map(embedItemRef));
     for (const rating of this.data.ratings ?? []) {
       rating.value = normalizeRatingValue(rating.value);
       const state = ratingLinkState(rating.link, available);
       const linkedItem = rating.link
-        ? this.data.items.find((item) => item.url === rating.link?.ref)
+        ? this.data.items.find((item) => embedItemRef(item) === rating.link?.ref)
         : undefined;
       const el = this.canvasEl.createDiv({ cls: `web-desk-rating is-${state}` });
       if (rating.objectGroup) el.addClass("is-object-grouped");
@@ -714,7 +728,7 @@ export class DeskEmbed {
       cards: this.data.items.map((item) => {
         const size = item.size ?? 96;
         return {
-          ref: item.url,
+          ref: embedItemRef(item),
           x: item.x,
           y: item.y,
           w: size + 24,
@@ -1246,7 +1260,31 @@ export class DeskEmbed {
       this.editing ||
       (event.target as HTMLElement).closest(".web-desk-icon-resize")
     ) return;
-    this.onEmbedObjectPointerDown(event, item.url, el, () => window.open(item.url, "_blank"));
+    this.onEmbedObjectPointerDown(event, embedItemRef(item), el, () => this.activateItem(item));
+  }
+
+  private activateItem(item: EmbedItem): void {
+    if (!item.path) {
+      window.open(item.url, "_blank");
+      return;
+    }
+    const file = this.app.vault.getAbstractFileByPath(item.path);
+    if (file instanceof TFile) {
+      void this.app.workspace.getLeaf(false).openFile(file);
+    } else {
+      new Notice("原笔记已不存在");
+    }
+  }
+
+  private triggerFileHover(event: MouseEvent, targetEl: HTMLElement, linktext: string): void {
+    this.app.workspace.trigger("hover-link", {
+      event,
+      source: "web-desk",
+      hoverParent: this,
+      targetEl,
+      linktext,
+      sourcePath: this.filePath,
+    });
   }
 
   private onItemResizePointerDown(
@@ -1290,33 +1328,43 @@ export class DeskEmbed {
   private onItemContextMenu(event: MouseEvent, item: EmbedItem): void {
     event.preventDefault();
     event.stopPropagation();
-    this.ensureEmbedObjectSelection(item.url);
+    const ref = embedItemRef(item);
+    this.ensureEmbedObjectSelection(ref);
     const menu = new Menu();
-    menu.addItem((m) => m.setTitle("打开网页").setIcon("external-link").onClick(() => window.open(item.url, "_blank")));
-    menu.addItem((m) =>
-      m.setTitle("复制链接").setIcon("copy").onClick(() => {
+    if (item.path) {
+      menu.addItem((m) => m.setTitle("打开笔记").setIcon("file-text").onClick(() => this.activateItem(item)));
+      menu.addItem((m) => m.setTitle("复制双链").setIcon("copy").onClick(() => {
+        const file = this.app.vault.getAbstractFileByPath(item.path!);
+        if (file instanceof TFile) {
+          void navigator.clipboard.writeText(this.app.fileManager.generateMarkdownLink(file, this.filePath));
+          new Notice("已复制双链");
+        }
+      }));
+    } else {
+      menu.addItem((m) => m.setTitle("打开网页").setIcon("external-link").onClick(() => window.open(item.url, "_blank")));
+      menu.addItem((m) => m.setTitle("复制链接").setIcon("copy").onClick(() => {
         void navigator.clipboard.writeText(item.url);
         new Notice("已复制链接");
-      }),
-    );
+      }));
+    }
     menu.addItem((m) =>
-      m.setTitle("为此链接添加评分").setIcon("star").onClick(() => {
+      m.setTitle(item.path ? "为此文件添加评分" : "为此链接添加评分").setIcon("star").onClick(() => {
         const size = item.size ?? 96;
         this.addRating({ x: item.x + size + 152, y: item.y + 43 }, item);
       }),
     );
     menu.addItem((m) =>
       m.setTitle("从这里画箭头").setIcon("move-up-right").onClick(() => {
-        this.beginArrowDraft({ kind: "card", ref: item.url });
+        this.beginArrowDraft({ kind: "card", ref });
       }),
     );
     menu.addSeparator();
     menu.addItem((m) => m.setTitle("删除条目").setIcon("trash-2").onClick(() => {
       this.data.items = this.data.items.filter((entry) => entry !== item);
-      this.data.arrows = arrowsWithoutEndpoint(this.data.arrows, { kind: "card", ref: item.url });
+      this.data.arrows = arrowsWithoutEndpoint(this.data.arrows, { kind: "card", ref });
       this.renderItems();
       this.updateHint();
-      this.scheduleWrite();
+      this.scheduleWrite(Boolean(item.path));
     }));
     menu.addSeparator();
     this.appendEmbedObjectGroupMenu(menu);
@@ -1325,7 +1373,7 @@ export class DeskEmbed {
 
   private addRating(point: { x: number; y: number }, item?: EmbedItem): void {
     const ratings = this.data.ratings;
-    if (item && ratings.some((rating) => rating.link?.ref === item.url)) {
+    if (item && ratings.some((rating) => rating.link?.ref === embedItemRef(item))) {
       new Notice("这个链接已经有评分了");
       return;
     }
@@ -1341,7 +1389,7 @@ export class DeskEmbed {
       value: 0,
       x: position.x,
       y: position.y,
-      link: item ? { ref: item.url, title: item.title, url: item.url } : undefined,
+      link: item ? { ref: embedItemRef(item), title: item.title, url: item.url } : undefined,
     });
     this.renderItems();
     this.updateHint();
@@ -1602,7 +1650,7 @@ export class DeskEmbed {
     const cards = this.endpointScene().cards;
     if (recomputeGroupMembership(cards, this.data.groups) === 0) return;
     const groupsByRef = new Map(cards.map((card) => [card.ref, card.group ?? ""]));
-    for (const item of this.data.items) item.group = groupsByRef.get(item.url) ?? "";
+    for (const item of this.data.items) item.group = groupsByRef.get(embedItemRef(item)) ?? "";
   }
 
   // ---------- 缩放 ----------
@@ -1651,6 +1699,11 @@ export class DeskEmbed {
       await this.importImages(imageFiles, point);
       return;
     }
+    const markdownFiles = markdownFilesFromDrop(this.app, event.dataTransfer, this.filePath);
+    if (markdownFiles.length > 0) {
+      this.addMarkdownFiles(markdownFiles, point);
+      return;
+    }
     const text =
       event.dataTransfer?.getData("text/uri-list") ||
       event.dataTransfer?.getData("text/plain") ||
@@ -1664,6 +1717,36 @@ export class DeskEmbed {
     this.renderItems();
     this.updateHint();
     this.scheduleWrite();
+  }
+
+  private addMarkdownFiles(files: TFile[], point: { x: number; y: number }): void {
+    let added = 0;
+    for (const file of files) {
+      if (this.data.items.some((item) => item.path === file.path)) {
+        new Notice(`${file.basename} 已经在画布上了`);
+        continue;
+      }
+      const position = findAvailableEmbedItemPosition(this.data, {
+        x: Math.round(point.x - 48 + added * 32),
+        y: Math.round(point.y - 48 + added * 32),
+      });
+      this.data.items.push({
+        url: "",
+        path: file.path,
+        title: file.basename,
+        description: file.parent?.path || "Vault 根目录",
+        x: position.x,
+        y: position.y,
+        size: 96,
+      });
+      added += 1;
+    }
+    if (added === 0) return;
+    this.recomputeEmbedGroupMembership();
+    this.renderItems();
+    this.updateHint();
+    this.scheduleWrite(true);
+    new Notice(`已插入 ${added} 个文件卡片`);
   }
 
   private async onPaste(event: ClipboardEvent): Promise<void> {
@@ -1778,13 +1861,43 @@ export class DeskEmbed {
    * 调用点都位于点击、拖拽结束或批量导入完成等提交边界，无需再次 debounce。
    * 立即入队可在 Obsidian 重渲染旧块之前把权威坐标写进编辑器/文件。
    */
-  private scheduleWrite(): void {
+  private scheduleWrite(syncBacklinks = false): void {
     const fresh = this.serialize();
     this.writeQueue = this.writeQueue
-      .then(() => this.writeBack(fresh))
+      .then(async () => {
+        await this.writeBack(fresh);
+        if (syncBacklinks) await this.syncBacklinksAfterWrite(fresh);
+      })
       .catch((error) => {
         new Notice(`写回画布失败：${getErrorMessage(error)}`, 5000);
       });
+  }
+
+  private async syncBacklinksAfterWrite(fresh: string): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(this.filePath);
+    if (!(file instanceof TFile)) return;
+
+    let content = "";
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      content = await this.app.vault.read(file);
+      if (content.includes(fresh)) break;
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+    }
+    if (!content.includes(fresh)) {
+      throw new Error("编辑器尚未把画布写入磁盘，已暂停同步双链以避免覆盖正文");
+    }
+
+    const paths = extractEmbeddedMarkdownPaths(content);
+    const links = paths.map((path) => {
+      const target = this.app.vault.getAbstractFileByPath(path);
+      return target instanceof TFile
+        ? this.app.fileManager.generateMarkdownLink(target, file.path)
+        : `[[${path.replace(/\.md$/i, "")}]]`;
+    });
+    await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
+      if (links.length > 0) frontmatter.web_desk_links = links;
+      else delete frontmatter.web_desk_links;
+    });
   }
 
   private async writeBack(fresh: string): Promise<void> {

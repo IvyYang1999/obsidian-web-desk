@@ -27,6 +27,66 @@ const canvasState = loadTypeScript("src/canvas-state.ts");
 const embedWriteState = loadTypeScript("src/embed-write-state.ts");
 const objectGroupState = loadTypeScript("src/object-group-state.ts");
 const canvasPointer = loadTypeScript("src/canvas-pointer.ts");
+const fileLinkState = loadTypeScript("src/file-link-state.ts");
+
+test("Obsidian 内部拖拽优先解析 app 路径，并兼容 URL 与 WikiLink", () => {
+  assert.deepEqual(
+    fileLinkState.extractMarkdownLinkCandidates({
+      html: '<a href="app://obsidian.md/%E9%A1%B9%E7%9B%AE/%E8%AE%BE%E8%AE%A1.md">设计</a>',
+      text: "obsidian://open?vault=main&file=%E9%A1%B9%E7%9B%AE%2F%E8%AE%BE%E8%AE%A1.md",
+    }),
+    ["项目/设计.md"],
+  );
+  assert.deepEqual(
+    fileLinkState.extractMarkdownLinkCandidates({ text: "[[项目/设计|设计稿]]\n其它/记录.md" }),
+    ["项目/设计", "其它/记录.md"],
+  );
+});
+
+test("文内画布能从所有 web-desk 块汇总真实 Markdown 双链", () => {
+  const markdown = [
+    "```web-desk",
+    JSON.stringify({ items: [{ path: "项目/设计.md" }, { url: "https://example.com" }] }),
+    "```",
+    "正文",
+    "```web-desk",
+    JSON.stringify({ items: [{ path: "项目/研究.md" }, { path: "项目/设计.md" }] }),
+    "```",
+  ].join("\n");
+  assert.deepEqual(fileLinkState.extractEmbeddedMarkdownPaths(markdown), [
+    "项目/设计.md",
+    "项目/研究.md",
+  ]);
+});
+
+test("文件卡片与网页卡片使用互不冲突的稳定引用", () => {
+  assert.equal(embedState.embedItemRef({ url: "https://example.com" }), "https://example.com");
+  assert.equal(embedState.embedItemRef({ url: "", path: "项目/设计.md" }), "file:项目/设计.md");
+});
+
+test("文件卡片同时接入真实双链、原生悬停源与两种画布", () => {
+  const main = fs.readFileSync("src/main.ts", "utf8");
+  const view = fs.readFileSync("src/view.ts", "utf8");
+  const embed = fs.readFileSync("src/embed.ts", "utf8");
+  const storage = fs.readFileSync("src/file-link-storage.ts", "utf8");
+  assert.match(main, /registerHoverLinkSource\("web-desk"/);
+  assert.match(view, /createMarkdownShortcut/);
+  assert.match(view, /this\.layoutWrites\.set\(result\.file\.path/);
+  assert.match(view, /workspace\.trigger\("hover-link"/);
+  assert.match(embed, /markdownFilesFromDrop/);
+  assert.match(embed, /web_desk_links/);
+  assert.match(storage, /desk_file:/);
+  assert.match(storage, /generateMarkdownLink/);
+  const renderBody = view.match(/private render\(\): void \{([\s\S]*?)\n  \}\n\n  private renderIcon/);
+  assert.ok(renderBody);
+  assert.doesNotMatch(renderBody[1], /this\.render\(\)/);
+});
+
+test("文件卡片使用主题自适应的原生文档图标", () => {
+  const css = fs.readFileSync("styles.css", "utf8");
+  assert.match(css, /\.web-desk-file-thumb\s*\{[^}]*background-color:\s*var\(--background-primary-alt\)/s);
+  assert.match(css, /\.web-desk-file-icon svg\s*\{[^}]*stroke-width:\s*1\.6/s);
+});
 
 test("分类分组框缩放时只保留自身虚线边缘", () => {
   const css = fs.readFileSync("styles.css", "utf8");

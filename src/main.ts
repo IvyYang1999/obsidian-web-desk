@@ -40,6 +40,11 @@ export default class WebDeskPlugin extends Plugin {
   async onload(): Promise<void> {
     await this.loadDataInto();
 
+    this.registerHoverLinkSource("web-desk", {
+      display: "网页桌面",
+      defaultMod: false,
+    });
+
     const host: WebDeskHost = {
       getSettings: () => this.settings,
       getGroups: () => this.groups,

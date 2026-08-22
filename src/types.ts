@@ -101,6 +101,8 @@ export const DEFAULT_SETTINGS: WebDeskSettings = {
 /** 画布上单个收藏（一个 md 文件）的投影。 */
 export interface BookmarkCard {
   path: string;
+  /** 文件卡片指向的 Vault 内 Markdown；空字符串表示普通网页收藏。 */
+  targetPath: string;
   title: string;
   url: string;
   host: string;

@@ -1,4 +1,4 @@
-import { ItemView, Menu, Notice, TFile, WorkspaceLeaf } from "obsidian";
+import { ItemView, Menu, Notice, setIcon, TFile, WorkspaceLeaf } from "obsidian";
 import { importUrlAsBookmark } from "./importer";
 import {
   imageFilesFrom,
@@ -8,6 +8,7 @@ import {
 } from "./image-storage";
 import { isEditablePasteTarget, splitCanvasPaste } from "./clipboard-state";
 import { resizeImageToWidth } from "./image-state";
+import { createMarkdownShortcut, markdownFilesFromDrop } from "./file-link-storage";
 import { planAutoPositions, readCard, writeDeskFields } from "./layout";
 import { applyRecentLayoutWrite, RecentLayoutWrite } from "./layout-state";
 import { ConfirmModal, TextInputModal } from "./modals";
@@ -322,12 +323,12 @@ export class WebDeskView extends ItemView {
       this.cards.length === 0 && this.host.getImages().length === 0 && this.host.getRatings().length === 0
         ? "flex"
         : "none";
-    this.render();
   }
 
   private renderIcon(card: BookmarkCard): void {
     const el = this.canvasEl.createDiv({ cls: "web-desk-icon" });
     if (card.objectGroup) el.addClass("is-object-grouped");
+    if (card.targetPath) el.addClass("is-file-link");
     el.style.left = `${card.x}px`;
     el.style.top = `${card.y}px`;
     el.style.width = `${card.size + 24}px`;
@@ -336,7 +337,14 @@ export class WebDeskView extends ItemView {
     thumb.style.width = `${card.size}px`;
     thumb.style.height = `${card.size}px`;
 
-    if (card.url && card.host) {
+    if (card.targetPath) {
+      thumb.addClass("web-desk-file-thumb");
+      const icon = thumb.createDiv({ cls: "web-desk-file-icon" });
+      setIcon(icon, "file-text");
+      if (!(this.app.vault.getAbstractFileByPath(card.targetPath) instanceof TFile)) {
+        el.addClass("is-file-missing");
+      }
+    } else if (card.url && card.host) {
       const img = thumb.createEl("img", {
         cls: "web-desk-icon-img",
         attr: { src: faviconUrl(card.host), alt: card.host, draggable: "false" },
@@ -355,7 +363,9 @@ export class WebDeskView extends ItemView {
     handle.style.top = `${card.size - 4}px`;
 
     el.setAttribute("data-path", card.path);
-    el.setAttribute("aria-label", card.url ? `${card.title}\n${card.url}` : card.title);
+    el.setAttribute("aria-label", card.targetPath
+      ? `${card.title}\n${card.targetPath}`
+      : card.url ? `${card.title}\n${card.url}` : card.title);
 
     el.addEventListener("pointerdown", (event) => this.onIconPointerDown(event, card, el));
     el.addEventListener("dblclick", (event) => {
@@ -363,6 +373,9 @@ export class WebDeskView extends ItemView {
       this.openMarkdown(card);
     });
     el.addEventListener("contextmenu", (event) => this.onIconContextMenu(event, card));
+    if (card.targetPath) {
+      el.addEventListener("mouseover", (event) => this.triggerFileHover(event, el, card.targetPath, card.path));
+    }
     handle.addEventListener("pointerdown", (event) => this.onIconResizePointerDown(event, card, el));
 
     this.iconEls.set(card.path, el);
@@ -759,6 +772,10 @@ export class WebDeskView extends ItemView {
   }
 
   private activateCard(card: BookmarkCard): void {
+    if (card.targetPath) {
+      this.openMarkdown(card);
+      return;
+    }
     if (card.url) {
       window.open(card.url, "_blank");
       return;
@@ -802,26 +819,34 @@ export class WebDeskView extends ItemView {
 
     const menu = new Menu();
 
-    menu.addItem((item) =>
-      item
+    if (card.targetPath) {
+      menu.addItem((item) => item
+        .setTitle("打开原笔记")
+        .setIcon("file-text")
+        .onClick(() => this.openMarkdown(card)));
+      menu.addItem((item) => item
+        .setTitle("复制双链")
+        .setIcon("copy")
+        .onClick(() => {
+          const target = this.app.vault.getAbstractFileByPath(card.targetPath);
+          if (target instanceof TFile) {
+            void navigator.clipboard.writeText(this.app.fileManager.generateMarkdownLink(target, card.path));
+            new Notice("已复制双链");
+          }
+        }));
+    } else {
+      menu.addItem((item) => item
         .setTitle("打开网页")
         .setIcon("external-link")
         .onClick(() => {
-          if (card.url) {
-            window.open(card.url, "_blank");
-          } else {
-            new Notice("该收藏没有 url 元信息");
-          }
-        }),
-    );
-    menu.addItem((item) =>
-      item
+          if (card.url) window.open(card.url, "_blank");
+          else new Notice("该收藏没有 url 元信息");
+        }));
+      menu.addItem((item) => item
         .setTitle("打开 Markdown")
         .setIcon("file-text")
-        .onClick(() => this.openMarkdown(card)),
-    );
-    menu.addItem((item) =>
-      item
+        .onClick(() => this.openMarkdown(card)));
+      menu.addItem((item) => item
         .setTitle("复制链接")
         .setIcon("copy")
         .onClick(() => {
@@ -829,8 +854,8 @@ export class WebDeskView extends ItemView {
             void navigator.clipboard.writeText(card.url);
             new Notice("已复制链接");
           }
-        }),
-    );
+        }));
+    }
     menu.addItem((item) =>
       item
         .setTitle("从这里画箭头")
@@ -839,7 +864,7 @@ export class WebDeskView extends ItemView {
     );
     menu.addItem((item) =>
       item
-        .setTitle("为此链接添加评分")
+        .setTitle(card.targetPath ? "为此文件添加评分" : "为此链接添加评分")
         .setIcon("star")
         .onClick(() => this.addRating({
           x: card.x + card.size + 152,
@@ -940,7 +965,9 @@ export class WebDeskView extends ItemView {
     const selectedPaths = this.selectedCardPaths();
     const paths = this.selected.has(card.path) ? selectedPaths : [card.path];
     new ConfirmModal(this.app, {
-      message: `删除 ${paths.length} 个收藏的 md 文件？（移入仓库回收站，图标随之消失）`,
+      message: card.targetPath && paths.length === 1
+        ? "删除这个文件卡片？（只移除卡片，原笔记不会被删除）"
+        : `删除 ${paths.length} 个收藏的 md 文件？（移入仓库回收站，图标随之消失）`,
       okLabel: "删除",
       onOk: () => void this.deleteFiles(paths),
     }).open();
@@ -980,10 +1007,23 @@ export class WebDeskView extends ItemView {
   }
 
   private openMarkdown(card: BookmarkCard): void {
-    const file = this.app.vault.getAbstractFileByPath(card.path);
+    const file = this.app.vault.getAbstractFileByPath(card.targetPath || card.path);
     if (file instanceof TFile) {
       void this.app.workspace.getLeaf("tab").openFile(file);
+    } else if (card.targetPath) {
+      new Notice("原笔记已不存在");
     }
+  }
+
+  private triggerFileHover(event: MouseEvent, targetEl: HTMLElement, linktext: string, sourcePath: string): void {
+    this.app.workspace.trigger("hover-link", {
+      event,
+      source: "web-desk",
+      hoverParent: this,
+      targetEl,
+      linktext,
+      sourcePath,
+    });
   }
 
   private syncSelection(): void {
@@ -2234,6 +2274,11 @@ export class WebDeskView extends ItemView {
       await this.importImages(imageFiles, point);
       return;
     }
+    const markdownFiles = markdownFilesFromDrop(this.app, event.dataTransfer, "");
+    if (markdownFiles.length > 0) {
+      await this.importMarkdownFiles(markdownFiles, point);
+      return;
+    }
     const text =
       event.dataTransfer?.getData("text/uri-list") ||
       event.dataTransfer?.getData("text/plain") ||
@@ -2249,6 +2294,40 @@ export class WebDeskView extends ItemView {
     }
 
     await this.importUrls(urls, point);
+  }
+
+  private async importMarkdownFiles(files: TFile[], point: Point): Promise<void> {
+    this.interactionLock += 1;
+    try {
+      for (let index = 0; index < files.length; index += 1) {
+        const target = files[index];
+        const existing = this.cards.find((card) => card.path === target.path || card.targetPath === target.path);
+        if (existing) {
+          this.selected = new Set([existing.path]);
+          new Notice(`${target.basename} 已经在画布上了`);
+          continue;
+        }
+        const dropPoint = {
+          x: point.x + index * 32,
+          y: point.y + index * 32,
+        };
+        const result = await createMarkdownShortcut(this.app, this.settings, target, dropPoint);
+        if (result.created) {
+          this.layoutWrites.set(result.file.path, {
+            x: Math.round(dropPoint.x - this.settings.defaultIconSize / 2),
+            y: Math.round(dropPoint.y - this.settings.defaultIconSize / 2),
+            size: this.settings.defaultIconSize,
+            at: Date.now(),
+          });
+        }
+        new Notice(result.created ? `已创建文件卡片：${target.basename}` : `${target.basename} 已经在画布上了`);
+      }
+    } catch (error) {
+      new Notice(`插入文件失败：${getErrorMessage(error)}`, 6000);
+    } finally {
+      this.interactionLock -= 1;
+    }
+    await this.refresh();
   }
 
   private async onPaste(event: ClipboardEvent): Promise<void> {

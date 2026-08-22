@@ -15,7 +15,11 @@ export function readCard(file: TFile, app: App, defaultSize: number): BookmarkCa
   const fm = (cache?.frontmatter ?? {}) as Record<string, unknown>;
 
   const url = typeof fm.url === "string" ? fm.url : "";
-  const title = typeof fm.title === "string" && fm.title.trim() ? fm.title.trim() : file.basename;
+  const targetPath = typeof fm.desk_file === "string" ? fm.desk_file : "";
+  const target = targetPath ? app.vault.getAbstractFileByPath(targetPath) : null;
+  const title = target instanceof TFile
+    ? target.basename
+    : typeof fm.title === "string" && fm.title.trim() ? fm.title.trim() : file.basename;
   const x = readNumber(fm.desk_x) ?? 0;
   const y = readNumber(fm.desk_y) ?? 0;
   const size = readNumber(fm.desk_size) ?? defaultSize;
@@ -33,6 +37,7 @@ export function readCard(file: TFile, app: App, defaultSize: number): BookmarkCa
 
   return {
     path: file.path,
+    targetPath,
     title,
     url,
     host,
