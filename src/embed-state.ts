@@ -15,6 +15,18 @@ export type EmbedTextBox = TextBox;
 
 export interface EmbedData extends CanvasComponents {
   items: EmbedItem[];
+  height: number;
+}
+
+export const DEFAULT_EMBED_HEIGHT = 420;
+export const MIN_EMBED_HEIGHT = 240;
+export const MAX_EMBED_HEIGHT = 1600;
+
+export function normalizeEmbedHeight(value: unknown): number {
+  const height = typeof value === "number" && Number.isFinite(value)
+    ? Math.round(value)
+    : DEFAULT_EMBED_HEIGHT;
+  return Math.min(MAX_EMBED_HEIGHT, Math.max(MIN_EMBED_HEIGHT, height));
 }
 
 interface EmbedRect {
@@ -96,7 +108,15 @@ function findAvailableEmbedPosition(
 }
 
 export function emptyEmbedData(): EmbedData {
-  return { items: [], images: [], textboxes: [], groups: [], arrows: [], ratings: [] };
+  return {
+    items: [],
+    images: [],
+    textboxes: [],
+    groups: [],
+    arrows: [],
+    ratings: [],
+    height: DEFAULT_EMBED_HEIGHT,
+  };
 }
 
 export function parseEmbedData(source: string): EmbedData {
@@ -119,6 +139,7 @@ export function parseEmbedData(source: string): EmbedData {
         groups: Array.isArray(parsed.groups) ? parsed.groups : [],
         arrows: Array.isArray(parsed.arrows) ? parsed.arrows : [],
         ratings: Array.isArray(parsed.ratings) ? parsed.ratings : [],
+        height: normalizeEmbedHeight(parsed.height),
       };
       return data;
     }

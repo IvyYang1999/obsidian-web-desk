@@ -71,6 +71,7 @@ test("旧版内嵌画布数据在没有 images 字段时仍可读取", () => {
     groups: [],
     arrows: [],
     ratings: [],
+    height: 420,
   });
 });
 
@@ -86,7 +87,15 @@ test("正文插入项生成可解析的空 web-desk 代码块", () => {
     groups: [],
     arrows: [],
     ratings: [],
+    height: 420,
   });
+});
+
+test("文内画布高度限制在可操作范围并取整", () => {
+  assert.equal(embedState.normalizeEmbedHeight(undefined), 420);
+  assert.equal(embedState.normalizeEmbedHeight(100), 240);
+  assert.equal(embedState.normalizeEmbedHeight(777.6), 778);
+  assert.equal(embedState.normalizeEmbedHeight(3000), 1600);
 });
 
 test("旧文内文本框补默认颜色且新版分组箭头可往返", () => {

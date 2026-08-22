@@ -316,6 +316,40 @@
   isolation: isolate;
 }
 
+.web-desk-embed-height-resize {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 96px;
+  height: 18px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ns-resize;
+  z-index: 31;
+  touch-action: none;
+}
+
+.web-desk-embed-height-resize::before {
+  content: "";
+  width: 52px;
+  height: 4px;
+  border-radius: 999px;
+  background-color: var(--wd-border-color);
+  transition: width var(--wd-motion-fast), background-color var(--wd-motion-fast);
+}
+
+.web-desk-embed-height-resize:hover::before,
+.web-desk-embed-height-resize.is-resizing::before {
+  width: 64px;
+  background-color: var(--interactive-accent);
+}
+
+.web-desk-embed.is-resizing-height {
+  cursor: ns-resize;
+}
+
 /* 默认焦点 outline 绘制在元素外侧，容易被 Obsidian 的代码块容器裁掉。 */
 .web-desk-embed:focus-visible::after {
   content: "";

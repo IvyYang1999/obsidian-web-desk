@@ -3,8 +3,11 @@ import {
   EmbedData,
   EmbedItem,
   EmbedTextBox,
+  MAX_EMBED_HEIGHT,
+  MIN_EMBED_HEIGHT,
   findAvailableEmbedItemPosition,
   findAvailableEmbedRatingPosition,
+  normalizeEmbedHeight,
   parseEmbedData,
 } from "./embed-state";
 import {
@@ -52,7 +55,6 @@ interface EmbedCtxLike {
   getSectionInfo(el: HTMLElement): { text: string; lineStart: number; lineEnd: number } | null;
 }
 
-const EMBED_HEIGHT = 420;
 const MIN_ZOOM = 0.3;
 const MAX_ZOOM = 2;
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -117,7 +119,7 @@ export class DeskEmbed {
 
     this.rootEl = this.el.createDiv({ cls: "web-desk-embed" });
     this.rootEl.tabIndex = 0;
-    this.rootEl.style.height = `${EMBED_HEIGHT}px`;
+    this.rootEl.style.height = `${this.data.height}px`;
 
     this.canvasEl = this.rootEl.createDiv({ cls: "web-desk-canvas web-desk-embed-canvas" });
 
@@ -133,6 +135,22 @@ export class DeskEmbed {
     const zoomIn = toolbar.createEl("button", { text: "＋", cls: "web-desk-tool-btn" });
     zoomOut.addEventListener("click", () => this.zoomAtCenter(1 / 1.2));
     zoomIn.addEventListener("click", () => this.zoomAtCenter(1.2));
+
+    const heightHandle = this.rootEl.createDiv({
+      cls: "web-desk-embed-height-resize",
+      attr: {
+        role: "separator",
+        "aria-label": "拖拽调整画布高度",
+        "aria-orientation": "horizontal",
+        "aria-valuemin": String(MIN_EMBED_HEIGHT),
+        "aria-valuemax": String(MAX_EMBED_HEIGHT),
+        "aria-valuenow": String(this.data.height),
+        title: "拖拽调整画布高度",
+      },
+    });
+    heightHandle.addEventListener("pointerdown", (event) =>
+      this.onEmbedHeightResizePointerDown(event, heightHandle),
+    );
 
     this.bindCanvasEvents();
     this.renderItems();
@@ -448,6 +466,29 @@ export class DeskEmbed {
         if (!moved) return;
         this.recomputeEmbedGroupMembership();
         this.scheduleWrite();
+      },
+    });
+  }
+
+  private onEmbedHeightResizePointerDown(event: PointerEvent, handle: HTMLElement): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const origin = this.data.height;
+    this.rootEl.addClass("is-resizing-height");
+    beginCanvasPointerSession({
+      event,
+      element: handle,
+      zoom: () => 1,
+      resizing: true,
+      onMove: (delta) => {
+        this.data.height = normalizeEmbedHeight(origin + delta.y);
+        this.rootEl.style.height = `${this.data.height}px`;
+        handle.setAttribute("aria-valuenow", String(this.data.height));
+      },
+      onEnd: (moved) => {
+        this.rootEl.removeClass("is-resizing-height");
+        if (moved) this.scheduleWrite();
       },
     });
   }
