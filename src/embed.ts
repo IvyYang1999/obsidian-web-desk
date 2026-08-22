@@ -6,6 +6,7 @@ import {
   imageResourceUrl,
   storeImageFile,
 } from "./image-storage";
+import { isEditablePasteTarget, splitCanvasPaste } from "./clipboard-state";
 import { resizeImageToWidth } from "./image-state";
 import { fetchBookmarkMeta } from "./importer";
 import { GROUP_COLORS } from "./types";
@@ -76,7 +77,7 @@ export class DeskEmbed {
     this.hintEl = this.rootEl.createDiv({ cls: "web-desk-hint" });
     this.hintEl.createDiv({
       cls: "web-desk-hint-body",
-      text: "把网页链接或本地图片拖进来，也可以直接粘贴剪贴板图片",
+      text: "拖入网页链接或本地图片；Ctrl/Cmd+V 粘贴 URL、文本或图片",
     });
 
     const toolbar = this.rootEl.createDiv({ cls: "web-desk-toolbar" });
@@ -562,11 +563,33 @@ export class DeskEmbed {
   }
 
   private async onPaste(event: ClipboardEvent): Promise<void> {
+    if (event.defaultPrevented || isEditablePasteTarget(event.target)) return;
     const imageFiles = imageFilesFromClipboard(event.clipboardData);
-    if (imageFiles.length === 0) return;
+    if (imageFiles.length > 0) {
+      event.preventDefault();
+      event.stopPropagation();
+      await this.importImages(imageFiles, this.visibleCenter());
+      return;
+    }
+
+    const clipboardText =
+      event.clipboardData?.getData("text/uri-list") ||
+      event.clipboardData?.getData("text/plain") ||
+      "";
+    const paste = splitCanvasPaste(clipboardText);
+    if (paste.urls.length === 0 && !paste.text) return;
+
     event.preventDefault();
     event.stopPropagation();
-    await this.importImages(imageFiles, this.visibleCenter());
+    const point = this.visibleCenter();
+    if (paste.text) this.addTextBox(point, paste.text);
+    if (paste.urls.length > 0) {
+      const urlPoint = paste.text ? { x: point.x + 190, y: point.y } : point;
+      for (const url of paste.urls) await this.addUrl(url, urlPoint, true);
+      this.renderItems();
+      this.updateHint();
+      this.scheduleWrite();
+    }
   }
 
   private async importImages(files: File[], point: { x: number; y: number }): Promise<void> {
@@ -617,11 +640,11 @@ export class DeskEmbed {
     }
   }
 
-  private addTextBox(point: { x: number; y: number }): void {
+  private addTextBox(point: { x: number; y: number }, text = "双击编辑"): void {
     const boxes = this.data.textboxes ?? (this.data.textboxes = []);
     boxes.push({
       id: `t${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`,
-      text: "双击编辑",
+      text,
       x: Math.round(point.x - 130),
       y: Math.round(point.y - 60),
       w: 260,

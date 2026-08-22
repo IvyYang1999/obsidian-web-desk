@@ -6,6 +6,7 @@ import {
   imageResourceUrl,
   storeImageFile,
 } from "./image-storage";
+import { isEditablePasteTarget, splitCanvasPaste } from "./clipboard-state";
 import { resizeImageToWidth } from "./image-state";
 import { planAutoPositions, readCard, writeDeskFields } from "./layout";
 import { applyRecentLayoutWrite, RecentLayoutWrite } from "./layout-state";
@@ -130,7 +131,7 @@ export class WebDeskView extends ItemView {
     this.hintEl.createDiv({ cls: "web-desk-hint-title", text: "网页桌面" });
     this.hintEl.createDiv({
       cls: "web-desk-hint-body",
-      text: "把网页链接或本地图片拖到这里；点击画布后也可直接粘贴剪贴板图片。",
+      text: "拖入网页链接或本地图片；Ctrl/Cmd+V 粘贴 URL、文本或图片。",
     });
 
     const toolbar = this.rootEl.createDiv({ cls: "web-desk-toolbar" });
@@ -158,7 +159,10 @@ export class WebDeskView extends ItemView {
       event.stopPropagation();
       void this.onDrop(event);
     });
-    this.rootEl.addEventListener("paste", (event) => void this.onPaste(event));
+    this.registerDomEvent(this.rootEl.ownerDocument, "paste", (event) => {
+      if (this.app.workspace.activeLeaf?.view !== this) return;
+      void this.onPaste(event);
+    });
 
     this.applyTransform();
   }
@@ -1853,11 +1857,32 @@ export class WebDeskView extends ItemView {
   }
 
   private async onPaste(event: ClipboardEvent): Promise<void> {
+    if (event.defaultPrevented || isEditablePasteTarget(event.target)) return;
     const imageFiles = imageFilesFromClipboard(event.clipboardData);
-    if (imageFiles.length === 0) return;
+    if (imageFiles.length > 0) {
+      event.preventDefault();
+      event.stopPropagation();
+      await this.importImages(imageFiles, this.visibleCenter());
+      return;
+    }
+
+    const clipboardText =
+      event.clipboardData?.getData("text/uri-list") ||
+      event.clipboardData?.getData("text/plain") ||
+      "";
+    const paste = splitCanvasPaste(clipboardText);
+    if (paste.urls.length === 0 && !paste.text) return;
+
     event.preventDefault();
     event.stopPropagation();
-    await this.importImages(imageFiles, this.visibleCenter());
+    const point = this.visibleCenter();
+    if (paste.text) this.addTextBox(point.x - 130, point.y - 60, paste.text);
+    if (paste.urls.length > 0) {
+      await this.importUrls(
+        paste.urls,
+        paste.text ? { x: point.x + 190, y: point.y } : point,
+      );
+    }
   }
 
   private async importImages(files: File[], point: Point): Promise<void> {

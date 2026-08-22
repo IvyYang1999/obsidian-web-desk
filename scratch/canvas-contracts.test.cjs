@@ -21,6 +21,7 @@ function loadTypeScript(entryPoint) {
 
 const imageState = loadTypeScript("src/image-state.ts");
 const embedState = loadTypeScript("src/embed-state.ts");
+const clipboardState = loadTypeScript("src/clipboard-state.ts");
 
 test("横图插入画布时按默认边界等比例缩小", () => {
   assert.deepEqual(imageState.fitImageWithin(1200, 800), { w: 360, h: 240 });
@@ -73,4 +74,32 @@ test("正文插入项生成可解析的空 web-desk 代码块", () => {
   assert.match(block, /\n```$/);
   const json = block.slice("```web-desk\n".length, -"\n```".length);
   assert.deepEqual(JSON.parse(json), { items: [], images: [], textboxes: [] });
+});
+
+test("粘贴一个或多个整行 URL 时全部进入链接导入", () => {
+  assert.deepEqual(
+    clipboardState.splitCanvasPaste("https://example.com\ncomponent.gallery"),
+    { urls: ["https://example.com", "component.gallery"], text: "" },
+  );
+});
+
+test("混合粘贴时 URL 行与普通文本无损分流", () => {
+  assert.deepEqual(
+    clipboardState.splitCanvasPaste("设计参考\nhttps://example.com\n后续再看"),
+    { urls: ["https://example.com"], text: "设计参考\n后续再看" },
+  );
+});
+
+test("句子里的 URL 保留在文本框而不是丢掉上下文", () => {
+  assert.deepEqual(
+    clipboardState.splitCanvasPaste("参考 https://example.com 的布局"),
+    { urls: [], text: "参考 https://example.com 的布局" },
+  );
+});
+
+test("单个普通单词按文本处理，不误判成裸域名", () => {
+  assert.deepEqual(clipboardState.splitCanvasPaste("hello"), {
+    urls: [],
+    text: "hello",
+  });
 });
