@@ -28,6 +28,14 @@ import { fetchBookmarkMeta } from "./importer";
 import { TextInputModal } from "./modals";
 import { beginCanvasPointerSession } from "./canvas-pointer";
 import {
+  GroupObjectRect,
+  objectGroupBounds,
+  objectKey,
+  scaleObjectGroup,
+  splitObjectKey,
+  translateObjectGroup,
+} from "./object-group-state";
+import {
   arrowLine,
   arrowsWithoutEndpoint,
   clearGroupMembership,
@@ -61,6 +69,12 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const ARROW_SPAN = 20000;
 let pendingEmbedFocus: { key: string; expiresAt: number } | null = null;
 
+interface EmbedViewObject extends GroupObjectRect {
+  kind: "card" | "image" | "textbox" | "rating";
+  id: string;
+  objectGroup: string;
+}
+
 /**
  * 笔记内嵌画布（```web-desk code block）。
  * 数据全部存在块内（纯 md 到底），编辑后写回块源码；
@@ -82,7 +96,13 @@ export class DeskEmbed {
   private zoomEl!: HTMLElement;
   private embedKey = "";
   private iconEls = new Map<number, HTMLElement>();
+  private imageEls = new Map<string, HTMLElement>();
+  private textBoxEls = new Map<string, HTMLElement>();
+  private ratingEls = new Map<string, HTMLElement>();
   private groupEls = new Map<string, HTMLElement>();
+  private marqueeEl!: HTMLElement;
+  private objectSelectionEl: HTMLElement | null = null;
+  private selectedObjects = new Set<string>();
   private arrowsG: SVGGElement | null = null;
   private arrowMarkerIds = new Map<string, string>();
   private selectedArrowId: string | null = null;
@@ -93,6 +113,7 @@ export class DeskEmbed {
   private panY = 0;
   private busy = false;
   private editing = false;
+  private spacePanning = false;
   /** 所有块写入严格串行，旧提交不能晚于新提交落盘。 */
   private writeQueue: Promise<void> = Promise.resolve();
 
@@ -122,11 +143,13 @@ export class DeskEmbed {
     this.rootEl.style.height = `${this.data.height}px`;
 
     this.canvasEl = this.rootEl.createDiv({ cls: "web-desk-canvas web-desk-embed-canvas" });
+    this.marqueeEl = this.rootEl.createDiv({ cls: "web-desk-marquee" });
+    this.marqueeEl.style.display = "none";
 
     this.hintEl = this.rootEl.createDiv({ cls: "web-desk-hint" });
     this.hintEl.createDiv({
       cls: "web-desk-hint-body",
-      text: "拖入网页链接或本地图片；Ctrl/Cmd+V 粘贴 URL、文本或图片",
+      text: "拖入或粘贴内容；拖框多选，Ctrl/Cmd+G 组合，Space+拖动平移",
     });
 
     const toolbar = this.rootEl.createDiv({ cls: "web-desk-toolbar" });
@@ -179,6 +202,9 @@ export class DeskEmbed {
 
   private renderItems(): void {
     this.iconEls.clear();
+    this.imageEls.clear();
+    this.textBoxEls.clear();
+    this.ratingEls.clear();
     this.groupEls.clear();
     this.canvasEl.empty();
 
@@ -198,11 +224,13 @@ export class DeskEmbed {
       this.renderItem(this.data.items[index], index);
     }
     this.renderArrows();
+    this.syncObjectSelection();
   }
 
   private renderItem(item: EmbedItem, index: number): void {
     const size = item.size ?? 96;
     const el = this.canvasEl.createDiv({ cls: "web-desk-icon" });
+    if (item.objectGroup) el.addClass("is-object-grouped");
     el.style.left = `${item.x}px`;
     el.style.top = `${item.y}px`;
     el.style.width = `${size + 24}px`;
@@ -247,6 +275,316 @@ export class DeskEmbed {
     block.style.fontSize = `${Math.round(size * 0.42)}px`;
   }
 
+  private allEmbedObjects(): EmbedViewObject[] {
+    return [
+      ...this.data.items.map((item) => {
+        const size = item.size ?? 96;
+        return {
+          key: item.url,
+          kind: "card" as const,
+          id: item.url,
+          objectGroup: item.objectGroup ?? "",
+          x: item.x,
+          y: item.y,
+          w: size + 24,
+          h: size + 44,
+          minW: 56,
+          minH: 76,
+          maxW: 344,
+          maxH: 364,
+        };
+      }),
+      ...this.data.images.map((image) => ({
+        key: objectKey("image", image.id),
+        kind: "image" as const,
+        id: image.id,
+        objectGroup: image.objectGroup ?? "",
+        x: image.x,
+        y: image.y,
+        w: image.w,
+        h: image.h,
+        minW: 80,
+        minH: image.h * (80 / image.w),
+      })),
+      ...this.data.textboxes.map((box) => ({
+        key: objectKey("textbox", box.id),
+        kind: "textbox" as const,
+        id: box.id,
+        objectGroup: box.objectGroup ?? "",
+        x: box.x,
+        y: box.y,
+        w: box.w,
+        h: box.h,
+        minW: 140,
+        minH: 60,
+      })),
+      ...this.data.ratings.map((rating) => {
+        const scale = rating.scale ?? 1;
+        return {
+          key: objectKey("rating", rating.id),
+          kind: "rating" as const,
+          id: rating.id,
+          objectGroup: rating.objectGroup ?? "",
+          x: rating.x,
+          y: rating.y,
+          w: 208 * scale,
+          h: 86 * scale,
+          minW: 104,
+          minH: 43,
+          maxW: 624,
+          maxH: 258,
+        };
+      }),
+    ];
+  }
+
+  private selectedEmbedObjects(): EmbedViewObject[] {
+    return this.allEmbedObjects().filter((object) => this.selectedObjects.has(object.key));
+  }
+
+  private selectEmbedObject(key: string, additive: boolean): void {
+    const objects = this.allEmbedObjects();
+    const object = objects.find((entry) => entry.key === key);
+    if (!object) return;
+    const keys = object.objectGroup
+      ? objects.filter((entry) => entry.objectGroup === object.objectGroup).map((entry) => entry.key)
+      : [key];
+    if (!additive) this.selectedObjects.clear();
+    const remove = additive && keys.every((entry) => this.selectedObjects.has(entry));
+    for (const entry of keys) {
+      if (remove) this.selectedObjects.delete(entry);
+      else this.selectedObjects.add(entry);
+    }
+    this.selectedArrowId = null;
+    this.syncObjectSelection();
+  }
+
+  private ensureEmbedObjectSelection(key: string): void {
+    if (!this.selectedObjects.has(key)) this.selectEmbedObject(key, false);
+  }
+
+  private embedObjectElement(object: EmbedViewObject): HTMLElement | undefined {
+    if (object.kind === "card") {
+      const index = this.data.items.findIndex((item) => item.url === object.id);
+      return this.iconEls.get(index);
+    }
+    if (object.kind === "image") return this.imageEls.get(object.id);
+    if (object.kind === "textbox") return this.textBoxEls.get(object.id);
+    return this.ratingEls.get(object.id);
+  }
+
+  private applyEmbedObjectPosition(key: string, x: number, y: number): void {
+    const parsed = splitObjectKey(key);
+    if (!parsed) {
+      const item = this.data.items.find((entry) => entry.url === key);
+      if (item) { item.x = x; item.y = y; }
+      const index = this.data.items.findIndex((entry) => entry.url === key);
+      const el = this.iconEls.get(index);
+      if (el) { el.style.left = `${x}px`; el.style.top = `${y}px`; }
+      return;
+    }
+    const collection = parsed.kind === "image"
+      ? this.data.images
+      : parsed.kind === "textbox"
+        ? this.data.textboxes
+        : parsed.kind === "rating"
+          ? this.data.ratings
+          : [];
+    const item = collection.find((entry) => entry.id === parsed.id);
+    if (item) { item.x = x; item.y = y; }
+    const object = this.allEmbedObjects().find((entry) => entry.key === key);
+    const el = object ? this.embedObjectElement(object) : undefined;
+    if (el) { el.style.left = `${x}px`; el.style.top = `${y}px`; }
+  }
+
+  private applyEmbedObjectScale(origin: EmbedViewObject, x: number, y: number, scale: number): void {
+    this.applyEmbedObjectPosition(origin.key, x, y);
+    if (origin.kind === "card") {
+      const item = this.data.items.find((entry) => entry.url === origin.id);
+      if (!item) return;
+      item.size = Math.min(320, Math.max(32, Math.round((origin.w - 24) * scale)));
+      const index = this.data.items.findIndex((entry) => entry.url === origin.id);
+      const el = this.iconEls.get(index);
+      if (el) updateEmbedIconElementSize(el, item.size);
+      return;
+    }
+    if (origin.kind === "image") {
+      const image = this.data.images.find((entry) => entry.id === origin.id);
+      if (!image) return;
+      image.w = Math.round(origin.w * scale);
+      image.h = Math.round(origin.h * scale);
+      const el = this.imageEls.get(origin.id);
+      if (el) { el.style.width = `${image.w}px`; el.style.height = `${image.h}px`; }
+      return;
+    }
+    if (origin.kind === "textbox") {
+      const box = this.data.textboxes.find((entry) => entry.id === origin.id);
+      if (!box) return;
+      box.w = Math.round(origin.w * scale);
+      box.h = Math.round(origin.h * scale);
+      const el = this.textBoxEls.get(origin.id);
+      if (el) { el.style.width = `${box.w}px`; el.style.height = `${box.h}px`; }
+      return;
+    }
+    const rating = this.data.ratings.find((entry) => entry.id === origin.id);
+    if (!rating) return;
+    rating.scale = Math.min(3, Math.max(0.5, (origin.w / 208) * scale));
+    const el = this.ratingEls.get(origin.id);
+    if (el) el.style.transform = `scale(${rating.scale})`;
+  }
+
+  private syncObjectSelection(): void {
+    this.data.items.forEach((item, index) => this.iconEls.get(index)?.toggleClass("is-selected", this.selectedObjects.has(item.url)));
+    for (const [id, el] of this.imageEls) el.toggleClass("is-selected", this.selectedObjects.has(objectKey("image", id)));
+    for (const [id, el] of this.textBoxEls) el.toggleClass("is-selected", this.selectedObjects.has(objectKey("textbox", id)));
+    for (const [id, el] of this.ratingEls) el.toggleClass("is-selected", this.selectedObjects.has(objectKey("rating", id)));
+    this.renderEmbedObjectSelection();
+  }
+
+  private renderEmbedObjectSelection(): void {
+    this.objectSelectionEl?.remove();
+    this.objectSelectionEl = null;
+    const objects = this.selectedEmbedObjects();
+    if (objects.length < 2) return;
+    const bounds = objectGroupBounds(objects);
+    if (!bounds) return;
+    const el = this.canvasEl.createDiv({ cls: "web-desk-object-selection" });
+    el.style.left = `${bounds.x}px`;
+    el.style.top = `${bounds.y}px`;
+    el.style.width = `${bounds.w}px`;
+    el.style.height = `${bounds.h}px`;
+    const groupId = objects[0].objectGroup;
+    const fullGroup = Boolean(groupId) && objects.every((object) => object.objectGroup === groupId) &&
+      this.allEmbedObjects().filter((object) => object.objectGroup === groupId).length === objects.length;
+    if (fullGroup) {
+      const handle = el.createDiv({ cls: "web-desk-object-selection-resize" });
+      handle.setAttribute("aria-label", "缩放组合");
+      handle.addEventListener("pointerdown", (event) => this.onEmbedGroupResizePointerDown(event, handle));
+    } else {
+      el.addClass("is-multiselect");
+    }
+    this.objectSelectionEl = el;
+  }
+
+  private onEmbedGroupResizePointerDown(event: PointerEvent, handle: HTMLElement): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const origins = this.selectedEmbedObjects();
+    const bounds = objectGroupBounds(origins);
+    if (!bounds || origins.length < 2) return;
+    beginCanvasPointerSession({
+      event,
+      element: handle,
+      zoom: () => this.zoom,
+      resizing: true,
+      onMove: (delta) => {
+        const relativeX = delta.x / Math.max(bounds.w, 1);
+        const relativeY = delta.y / Math.max(bounds.h, 1);
+        const requested = 1 + (Math.abs(relativeX) >= Math.abs(relativeY) ? relativeX : relativeY);
+        const result = scaleObjectGroup(origins, requested);
+        result.objects.forEach((object, index) => {
+          this.applyEmbedObjectScale(origins[index], object.x, object.y, result.scale);
+        });
+        this.renderArrows();
+        this.updateEmbedObjectSelectionFrame();
+      },
+      onEnd: (moved) => {
+        if (moved) this.scheduleWrite();
+      },
+    });
+  }
+
+  private updateEmbedObjectSelectionFrame(): void {
+    if (!this.objectSelectionEl) return;
+    const bounds = objectGroupBounds(this.selectedEmbedObjects());
+    if (!bounds) return;
+    this.objectSelectionEl.style.left = `${bounds.x}px`;
+    this.objectSelectionEl.style.top = `${bounds.y}px`;
+    this.objectSelectionEl.style.width = `${bounds.w}px`;
+    this.objectSelectionEl.style.height = `${bounds.h}px`;
+  }
+
+  private setSelectedEmbedObjectGroup(groupId: string): void {
+    const objects = this.selectedEmbedObjects();
+    if (groupId && objects.length < 2) {
+      new Notice("请先多选至少两个元素");
+      return;
+    }
+    for (const object of objects) {
+      if (object.kind === "card") {
+        const item = this.data.items.find((entry) => entry.url === object.id);
+        if (item) item.objectGroup = groupId || undefined;
+      } else if (object.kind === "image") {
+        const image = this.data.images.find((entry) => entry.id === object.id);
+        if (image) image.objectGroup = groupId || undefined;
+      } else if (object.kind === "textbox") {
+        const box = this.data.textboxes.find((entry) => entry.id === object.id);
+        if (box) box.objectGroup = groupId || undefined;
+      } else {
+        const rating = this.data.ratings.find((entry) => entry.id === object.id);
+        if (rating) rating.objectGroup = groupId || undefined;
+      }
+    }
+    this.renderItems();
+    this.scheduleWrite();
+  }
+
+  private groupSelectedEmbedObjects(): void {
+    this.setSelectedEmbedObjectGroup(`og${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`);
+  }
+
+  private ungroupSelectedEmbedObjects(): void {
+    if (!this.selectedEmbedObjects().some((object) => object.objectGroup)) return;
+    this.setSelectedEmbedObjectGroup("");
+  }
+
+  private appendEmbedObjectGroupMenu(menu: Menu): void {
+    const objects = this.selectedEmbedObjects();
+    if (objects.length >= 2) {
+      menu.addItem((item) => item.setTitle("组合所选元素").setIcon("combine").onClick(() => this.groupSelectedEmbedObjects()));
+    }
+    if (objects.some((object) => object.objectGroup)) {
+      menu.addItem((item) => item.setTitle("取消组合").setIcon("ungroup").onClick(() => this.ungroupSelectedEmbedObjects()));
+    }
+  }
+
+  private onEmbedObjectPointerDown(
+    event: PointerEvent,
+    key: string,
+    el: HTMLElement,
+    activate?: () => void,
+  ): void {
+    event.stopPropagation();
+    this.rootEl.focus();
+    if (event.shiftKey) {
+      this.selectEmbedObject(key, true);
+      return;
+    }
+    this.ensureEmbedObjectSelection(key);
+    const origins = this.selectedEmbedObjects();
+    if (origins.length === 0) return;
+    beginCanvasPointerSession({
+      event,
+      element: el,
+      zoom: () => this.zoom,
+      onMove: (delta) => {
+        const translated = translateObjectGroup(origins, delta);
+        for (const object of translated) this.applyEmbedObjectPosition(object.key, object.x, object.y);
+        this.renderArrows();
+        this.renderEmbedObjectSelection();
+      },
+      onEnd: (moved) => {
+        if (!moved) {
+          activate?.();
+          return;
+        }
+        this.recomputeEmbedGroupMembership();
+        this.scheduleWrite();
+      },
+    });
+  }
+
   private renderRatings(): void {
     const available = new Set(this.data.items.map((item) => item.url));
     for (const rating of this.data.ratings ?? []) {
@@ -256,8 +594,11 @@ export class DeskEmbed {
         ? this.data.items.find((item) => item.url === rating.link?.ref)
         : undefined;
       const el = this.canvasEl.createDiv({ cls: `web-desk-rating is-${state}` });
+      if (rating.objectGroup) el.addClass("is-object-grouped");
       el.style.left = `${rating.x}px`;
       el.style.top = `${rating.y}px`;
+      el.style.transform = `scale(${rating.scale ?? 1})`;
+      el.style.transformOrigin = "top left";
       el.setAttribute("data-rating-id", rating.id);
 
       const header = el.createDiv({ cls: "web-desk-rating-header" });
@@ -296,6 +637,7 @@ export class DeskEmbed {
 
       el.addEventListener("pointerdown", (event) => this.onRatingPointerDown(event, rating, el));
       el.addEventListener("contextmenu", (event) => this.onRatingContextMenu(event, rating));
+      this.ratingEls.set(rating.id, el);
     }
   }
 
@@ -556,6 +898,7 @@ export class DeskEmbed {
 
   private renderTextBox(box: EmbedTextBox): void {
     const el = this.canvasEl.createDiv({ cls: "web-desk-textbox" });
+    if (box.objectGroup) el.addClass("is-object-grouped");
     el.style.left = `${box.x}px`;
     el.style.top = `${box.y}px`;
     el.style.width = `${box.w}px`;
@@ -574,10 +917,12 @@ export class DeskEmbed {
     });
     el.addEventListener("contextmenu", (event) => this.onTextBoxContextMenu(event, box, text));
     handle.addEventListener("pointerdown", (event) => this.onTextBoxResizePointerDown(event, box, el));
+    this.textBoxEls.set(box.id, el);
   }
 
   private renderImage(image: CanvasImage): void {
     const el = this.canvasEl.createDiv({ cls: "web-desk-image" });
+    if (image.objectGroup) el.addClass("is-object-grouped");
     el.style.left = `${image.x}px`;
     el.style.top = `${image.y}px`;
     el.style.width = `${image.w}px`;
@@ -600,6 +945,7 @@ export class DeskEmbed {
     handle.addEventListener("pointerdown", (event) =>
       this.onImageResizePointerDown(event, image, el),
     );
+    this.imageEls.set(image.id, el);
   }
 
   private onImagePointerDown(event: PointerEvent, image: CanvasImage, el: HTMLElement): void {
@@ -608,31 +954,7 @@ export class DeskEmbed {
       this.editing ||
       (event.target as HTMLElement).closest(".web-desk-image-resize")
     ) return;
-    event.stopPropagation();
-    this.rootEl.focus();
-    const start = { x: event.clientX, y: event.clientY };
-    const origin = { x: image.x, y: image.y };
-    let moved = false;
-    try { el.setPointerCapture(event.pointerId); } catch {}
-    const onMove = (moveEvent: PointerEvent): void => {
-      const dx = (moveEvent.clientX - start.x) / this.zoom;
-      const dy = (moveEvent.clientY - start.y) / this.zoom;
-      if (!moved && Math.hypot(dx, dy) * this.zoom < 4) return;
-      moved = true;
-      image.x = Math.round(origin.x + dx);
-      image.y = Math.round(origin.y + dy);
-      el.style.left = `${image.x}px`;
-      el.style.top = `${image.y}px`;
-    };
-    const onUp = (): void => {
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
-      el.removeEventListener("pointercancel", onUp);
-      if (moved) this.scheduleWrite();
-    };
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
-    el.addEventListener("pointercancel", onUp);
+    this.onEmbedObjectPointerDown(event, objectKey("image", image.id), el);
   }
 
   private onImageResizePointerDown(
@@ -677,6 +999,7 @@ export class DeskEmbed {
   private onImageContextMenu(event: MouseEvent, image: CanvasImage): void {
     event.preventDefault();
     event.stopPropagation();
+    this.ensureEmbedObjectSelection(objectKey("image", image.id));
     const menu = new Menu();
     menu.addItem((item) =>
       item.setTitle("打开图片文件").setIcon("image").onClick(() => {
@@ -696,6 +1019,8 @@ export class DeskEmbed {
           this.scheduleWrite();
         }),
     );
+    menu.addSeparator();
+    this.appendEmbedObjectGroupMenu(menu);
     menu.showAtMouseEvent(event);
   }
 
@@ -731,14 +1056,46 @@ export class DeskEmbed {
     }, { passive: false });
 
     this.rootEl.addEventListener("keydown", (event) => {
+      if (event.code === "Space" && !this.editing) {
+        this.spacePanning = true;
+        event.preventDefault();
+      }
       if (event.key === "Escape" && (this.arrowDraft || this.pendingArrowStart)) {
         event.preventDefault();
         this.cancelArrowDraft();
+        return;
+      }
+      if (event.key === "Escape") {
+        this.selectedObjects.clear();
+        this.syncObjectSelection();
+        return;
       }
       if ((event.key === "Delete" || event.key === "Backspace") && this.selectedArrowId) {
         event.preventDefault();
         this.removeArrow(this.selectedArrowId);
+        return;
       }
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "g") {
+        event.preventDefault();
+        this.ungroupSelectedEmbedObjects();
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "g") {
+        event.preventDefault();
+        this.groupSelectedEmbedObjects();
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        this.selectedObjects = new Set(this.allEmbedObjects().map((object) => object.key));
+        this.syncObjectSelection();
+      }
+    });
+    this.rootEl.addEventListener("keyup", (event) => {
+      if (event.code === "Space") this.spacePanning = false;
+    });
+    this.rootEl.addEventListener("blur", () => {
+      this.spacePanning = false;
     });
 
     // 空白拖动 = 平移（不抢点击）
@@ -746,14 +1103,19 @@ export class DeskEmbed {
       const target = event.target as HTMLElement;
       if (event.button === 0 && (this.arrowDraft || this.pendingArrowStart) && this.interceptArrowClick(event)) return;
       if (
-        event.button !== 0 ||
+        (event.button !== 0 && event.button !== 1) ||
         target.closest(".web-desk-icon") ||
         target.closest(".web-desk-group") ||
         target.closest(".web-desk-image") ||
         target.closest(".web-desk-textbox") ||
         target.closest(".web-desk-rating") ||
+        target.closest(".web-desk-object-selection") ||
         target.closest(".web-desk-toolbar")
       ) {
+        return;
+      }
+      if (event.button === 0 && !this.spacePanning) {
+        this.beginEmbedMarquee(event, event.shiftKey);
         return;
       }
       const startX = event.clientX;
@@ -773,6 +1135,10 @@ export class DeskEmbed {
       const onUp = (): void => {
         this.rootEl.removeEventListener("pointermove", onMove);
         this.rootEl.removeEventListener("pointerup", onUp);
+        if (!moved) {
+          this.selectedObjects.clear();
+          this.syncObjectSelection();
+        }
       };
       this.rootEl.addEventListener("pointermove", onMove);
       this.rootEl.addEventListener("pointerup", onUp);
@@ -796,7 +1162,8 @@ export class DeskEmbed {
         target.closest(".web-desk-group") ||
         target.closest(".web-desk-image") ||
         target.closest(".web-desk-textbox") ||
-        target.closest(".web-desk-rating")
+        target.closest(".web-desk-rating") ||
+        target.closest(".web-desk-object-selection")
       ) return;
       event.preventDefault();
       const menu = new Menu();
@@ -819,8 +1186,53 @@ export class DeskEmbed {
       menu.addItem((m) =>
         m.setTitle("画箭头（点两点）").setIcon("move-up-right").onClick(() => this.beginArrowFromScratch()),
       );
+      menu.addSeparator();
+      this.appendEmbedObjectGroupMenu(menu);
       menu.showAtMouseEvent(event);
     });
+  }
+
+  private beginEmbedMarquee(event: PointerEvent, additive: boolean): void {
+    event.preventDefault();
+    const start = this.clientToCanvas(event.clientX, event.clientY);
+    const base = additive ? new Set(this.selectedObjects) : new Set<string>();
+    let moved = false;
+    try { this.rootEl.setPointerCapture(event.pointerId); } catch {}
+    const onMove = (moveEvent: PointerEvent): void => {
+      const current = this.clientToCanvas(moveEvent.clientX, moveEvent.clientY);
+      const x = Math.min(start.x, current.x);
+      const y = Math.min(start.y, current.y);
+      const w = Math.abs(current.x - start.x);
+      const h = Math.abs(current.y - start.y);
+      if (!moved && w < 4 && h < 4) return;
+      moved = true;
+      this.marqueeEl.style.display = "block";
+      this.marqueeEl.style.left = `${x * this.zoom + this.panX}px`;
+      this.marqueeEl.style.top = `${y * this.zoom + this.panY}px`;
+      this.marqueeEl.style.width = `${w * this.zoom}px`;
+      this.marqueeEl.style.height = `${h * this.zoom}px`;
+    };
+    const onUp = (upEvent: PointerEvent): void => {
+      this.rootEl.removeEventListener("pointermove", onMove);
+      this.rootEl.removeEventListener("pointerup", onUp);
+      this.marqueeEl.style.display = "none";
+      if (!moved) return;
+      const rect = normalizeRect(start, this.clientToCanvas(upEvent.clientX, upEvent.clientY));
+      const objects = this.allEmbedObjects();
+      for (const object of objects) {
+        if (rectsIntersect(rect, object)) base.add(object.key);
+      }
+      for (const object of objects) {
+        if (object.objectGroup && base.has(object.key)) {
+          objects.filter((entry) => entry.objectGroup === object.objectGroup)
+            .forEach((entry) => base.add(entry.key));
+        }
+      }
+      this.selectedObjects = base;
+      this.syncObjectSelection();
+    };
+    this.rootEl.addEventListener("pointermove", onMove);
+    this.rootEl.addEventListener("pointerup", onUp);
   }
 
   private onItemPointerDown(event: PointerEvent, item: EmbedItem, el: HTMLElement): void {
@@ -830,39 +1242,7 @@ export class DeskEmbed {
       this.editing ||
       (event.target as HTMLElement).closest(".web-desk-icon-resize")
     ) return;
-    event.stopPropagation();
-
-    const size = item.size ?? 96;
-    const startClient = { x: event.clientX, y: event.clientY };
-    const origin = { x: item.x, y: item.y };
-    let moved = false;
-    try { el.setPointerCapture(event.pointerId); } catch {}
-
-    const onMove = (e: PointerEvent): void => {
-      const dx = (e.clientX - startClient.x) / this.zoom;
-      const dy = (e.clientY - startClient.y) / this.zoom;
-      if (!moved && Math.hypot(dx, dy) * this.zoom < 5) return;
-      moved = true;
-      item.x = Math.round(origin.x + dx);
-      item.y = Math.round(origin.y + dy);
-      el.style.left = `${item.x}px`;
-      el.style.top = `${item.y}px`;
-      this.renderArrows();
-    };
-    const onUp = (): void => {
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
-      el.removeEventListener("pointercancel", onUp);
-      if (!moved) {
-        window.open(item.url, "_blank");
-        return;
-      }
-      this.recomputeEmbedGroupMembership();
-      this.scheduleWrite();
-    };
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
-    el.addEventListener("pointercancel", onUp);
+    this.onEmbedObjectPointerDown(event, item.url, el, () => window.open(item.url, "_blank"));
   }
 
   private onItemResizePointerDown(
@@ -906,6 +1286,7 @@ export class DeskEmbed {
   private onItemContextMenu(event: MouseEvent, item: EmbedItem): void {
     event.preventDefault();
     event.stopPropagation();
+    this.ensureEmbedObjectSelection(item.url);
     const menu = new Menu();
     menu.addItem((m) => m.setTitle("打开网页").setIcon("external-link").onClick(() => window.open(item.url, "_blank")));
     menu.addItem((m) =>
@@ -933,6 +1314,8 @@ export class DeskEmbed {
       this.updateHint();
       this.scheduleWrite();
     }));
+    menu.addSeparator();
+    this.appendEmbedObjectGroupMenu(menu);
     menu.showAtMouseEvent(event);
   }
 
@@ -963,35 +1346,13 @@ export class DeskEmbed {
 
   private onRatingPointerDown(event: PointerEvent, rating: Rating, el: HTMLElement): void {
     if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
-    event.stopPropagation();
-    const start = { x: event.clientX, y: event.clientY };
-    const origin = { x: rating.x, y: rating.y };
-    let moved = false;
-    try { el.setPointerCapture(event.pointerId); } catch {}
-    const onMove = (moveEvent: PointerEvent): void => {
-      const dx = (moveEvent.clientX - start.x) / this.zoom;
-      const dy = (moveEvent.clientY - start.y) / this.zoom;
-      if (!moved && Math.hypot(dx, dy) * this.zoom < 4) return;
-      moved = true;
-      rating.x = Math.round(origin.x + dx);
-      rating.y = Math.round(origin.y + dy);
-      el.style.left = `${rating.x}px`;
-      el.style.top = `${rating.y}px`;
-    };
-    const onUp = (): void => {
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
-      el.removeEventListener("pointercancel", onUp);
-      if (moved) this.scheduleWrite();
-    };
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
-    el.addEventListener("pointercancel", onUp);
+    this.onEmbedObjectPointerDown(event, objectKey("rating", rating.id), el);
   }
 
   private onRatingContextMenu(event: MouseEvent, rating: Rating): void {
     event.preventDefault();
     event.stopPropagation();
+    this.ensureEmbedObjectSelection(objectKey("rating", rating.id));
     const menu = new Menu();
     if (rating.link) {
       menu.addItem((item) =>
@@ -1011,6 +1372,8 @@ export class DeskEmbed {
         this.scheduleWrite();
       }),
     );
+    menu.addSeparator();
+    this.appendEmbedObjectGroupMenu(menu);
     menu.showAtMouseEvent(event);
   }
 
@@ -1021,23 +1384,7 @@ export class DeskEmbed {
       this.editing ||
       (event.target as HTMLElement).closest(".web-desk-textbox-resize")
     ) return;
-    event.stopPropagation();
-    const origin = { x: box.x, y: box.y };
-    beginCanvasPointerSession({
-      event,
-      element: el,
-      zoom: () => this.zoom,
-      onMove: (delta) => {
-        box.x = Math.round(origin.x + delta.x);
-        box.y = Math.round(origin.y + delta.y);
-        el.style.left = `${box.x}px`;
-        el.style.top = `${box.y}px`;
-        this.renderArrows();
-      },
-      onEnd: (moved) => {
-        if (moved) this.scheduleWrite();
-      },
-    });
+    this.onEmbedObjectPointerDown(event, objectKey("textbox", box.id), el);
   }
 
   private onTextBoxResizePointerDown(event: PointerEvent, box: TextBox, el: HTMLElement): void {
@@ -1066,6 +1413,7 @@ export class DeskEmbed {
   private onTextBoxContextMenu(event: MouseEvent, box: TextBox, textEl: HTMLElement): void {
     event.preventDefault();
     event.stopPropagation();
+    this.ensureEmbedObjectSelection(objectKey("textbox", box.id));
     const menu = new Menu();
     menu.addItem((item) => item.setTitle("编辑文字").setIcon("pencil").onClick(() => this.editTextBox(box, textEl)));
     menu.addItem((item) => item.setTitle("换颜色").setIcon("palette").onClick(() => {
@@ -1084,6 +1432,8 @@ export class DeskEmbed {
       this.updateHint();
       this.scheduleWrite();
     }));
+    menu.addSeparator();
+    this.appendEmbedObjectGroupMenu(menu);
     menu.showAtMouseEvent(event);
   }
 
@@ -1497,4 +1847,23 @@ function markerPrefix(key: string): string {
     hash = Math.imul(hash, 16777619);
   }
   return `wd-embed-arrow-${(hash >>> 0).toString(36)}`;
+}
+
+function normalizeRect(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+): { x: number; y: number; w: number; h: number } {
+  return {
+    x: Math.min(a.x, b.x),
+    y: Math.min(a.y, b.y),
+    w: Math.abs(a.x - b.x),
+    h: Math.abs(a.y - b.y),
+  };
+}
+
+function rectsIntersect(
+  a: { x: number; y: number; w: number; h: number },
+  b: { x: number; y: number; w: number; h: number },
+): boolean {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 }

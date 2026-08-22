@@ -53,6 +53,14 @@ test("null 只删除显式指定的布局字段", () => {
   });
 });
 
+test("逻辑组合使用独立 frontmatter 字段，不覆盖分类分组", () => {
+  const fm = { desk_group: "阅读", desk_object_group: "old" };
+  applyDeskPatch(fm, { objectGroup: "og-new" });
+  assert.deepEqual(fm, { desk_group: "阅读", desk_object_group: "og-new" });
+  applyDeskPatch(fm, { objectGroup: null });
+  assert.deepEqual(fm, { desk_group: "阅读" });
+});
+
 test("近期本地布局写回同时恢复坐标和已放置状态", () => {
   const card = { x: 172, y: 40, size: 96, placed: false };
   const result = applyRecentLayoutWrite(
@@ -63,6 +71,12 @@ test("近期本地布局写回同时恢复坐标和已放置状态", () => {
 
   assert.equal(result, "applied");
   assert.deepEqual(card, { x: 380, y: 140, size: 144, placed: true });
+});
+
+test("metadataCache 滞后时近期写回保住逻辑组合归属", () => {
+  const card = { x: 10, y: 20, size: 96, placed: true, objectGroup: "old" };
+  applyRecentLayoutWrite(card, { x: 10, y: 20, objectGroup: "og-new", at: 1_000 }, 1_100);
+  assert.equal(card.objectGroup, "og-new");
 });
 
 test("过期的本地布局写回不覆盖权威坐标", () => {

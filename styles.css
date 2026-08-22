@@ -101,6 +101,17 @@
   box-shadow: 0 0 0 3px var(--interactive-accent-hover), var(--wd-shadow-md);
 }
 
+.web-desk-image.is-selected .web-desk-image-content,
+.web-desk-image.is-selected .web-desk-image-missing,
+.web-desk-rating.is-selected {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px var(--interactive-accent-hover), var(--wd-shadow-md);
+}
+
+.web-desk-textbox.is-selected {
+  box-shadow: inset 0 0 0 2px var(--interactive-accent);
+}
+
 .web-desk-icon-img {
   width: 62%;
   height: 62%;
@@ -207,6 +218,12 @@
   opacity: 1;
 }
 
+.is-object-grouped > .web-desk-icon-resize,
+.is-object-grouped > .web-desk-image-resize,
+.is-object-grouped > .web-desk-textbox-resize {
+  display: none;
+}
+
 /* 框选 */
 .web-desk-marquee {
   position: absolute;
@@ -216,6 +233,34 @@
   pointer-events: none;
   z-index: 20;
   border-radius: 3px;
+}
+
+/* Figma 式逻辑组合：外框由成员实时推导，避免持久化第二份几何后漂移。 */
+.web-desk-object-selection {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid var(--interactive-accent);
+  pointer-events: none;
+  z-index: 24;
+}
+
+.web-desk-object-selection.is-multiselect {
+  border-style: dashed;
+}
+
+.web-desk-object-selection-resize {
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  width: 12px;
+  height: 12px;
+  box-sizing: border-box;
+  border: 2px solid var(--background-primary);
+  border-radius: 2px;
+  background-color: var(--interactive-accent);
+  box-shadow: 0 0 0 1px var(--interactive-accent);
+  cursor: nwse-resize;
+  pointer-events: auto;
 }
 
 /* 工具条 */

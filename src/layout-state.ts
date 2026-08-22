@@ -3,6 +3,7 @@ export interface DeskPatch {
   y?: number | null;
   size?: number | null;
   group?: string | null;
+  objectGroup?: string | null;
 }
 
 export interface RecentLayoutWrite {
@@ -10,6 +11,7 @@ export interface RecentLayoutWrite {
   y: number;
   size?: number;
   at: number;
+  objectGroup?: string;
 }
 
 interface LayoutCardState {
@@ -17,6 +19,7 @@ interface LayoutCardState {
   y: number;
   size: number;
   placed: boolean;
+  objectGroup?: string;
 }
 
 type RecentLayoutResult = "applied" | "expired";
@@ -30,6 +33,7 @@ export function applyDeskPatch(fm: Record<string, unknown>, patch: DeskPatch): v
   if (patch.y !== undefined) assign(fm, "desk_y", patch.y);
   if (patch.size !== undefined) assign(fm, "desk_size", patch.size);
   if (patch.group !== undefined) assign(fm, "desk_group", patch.group);
+  if (patch.objectGroup !== undefined) assign(fm, "desk_object_group", patch.objectGroup);
 }
 
 /**
@@ -47,6 +51,7 @@ export function applyRecentLayoutWrite(
   card.y = write.y;
   if (write.size !== undefined) card.size = write.size;
   card.placed = true;
+  if (write.objectGroup !== undefined) card.objectGroup = write.objectGroup;
   return "applied";
 }
 

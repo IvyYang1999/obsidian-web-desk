@@ -24,6 +24,88 @@ const embedState = loadTypeScript("src/embed-state.ts");
 const clipboardState = loadTypeScript("src/clipboard-state.ts");
 const canvasState = loadTypeScript("src/canvas-state.ts");
 const embedWriteState = loadTypeScript("src/embed-write-state.ts");
+const objectGroupState = loadTypeScript("src/object-group-state.ts");
+const canvasPointer = loadTypeScript("src/canvas-pointer.ts");
+
+function pointerEvent(type, { x, y, pointerId = 1 }) {
+  const event = new Event(type);
+  Object.defineProperties(event, {
+    clientX: { value: x },
+    clientY: { value: y },
+    pointerId: { value: pointerId },
+  });
+  return event;
+}
+
+test("指针提交监听挂在稳定 document 上，元素失去捕获后仍能落盘", () => {
+  const document = new EventTarget();
+  const element = new EventTarget();
+  element.ownerDocument = document;
+  element.addClass = () => {};
+  element.removeClass = () => {};
+  element.setPointerCapture = () => {};
+  element.releasePointerCapture = () => {};
+  const deltas = [];
+  const endings = [];
+
+  canvasPointer.beginCanvasPointerSession({
+    event: { clientX: 10, clientY: 20, pointerId: 7 },
+    element,
+    zoom: () => 2,
+    onMove: (delta) => deltas.push(delta),
+    onEnd: (moved) => endings.push(moved),
+  });
+  document.dispatchEvent(pointerEvent("pointermove", { x: 30, y: 50, pointerId: 7 }));
+  document.dispatchEvent(pointerEvent("pointerup", { x: 30, y: 50, pointerId: 7 }));
+
+  assert.deepEqual(deltas, [{ x: 10, y: 15 }]);
+  assert.deepEqual(endings, [true]);
+});
+
+test("组合边界由成员几何实时推导，不保存第二份易漂移坐标", () => {
+  assert.deepEqual(
+    objectGroupState.objectGroupBounds([
+      { key: "card:one", x: 20, y: 40, w: 120, h: 140 },
+      { key: "image:two", x: 180, y: 10, w: 200, h: 100 },
+    ]),
+    { x: 20, y: 10, w: 360, h: 170 },
+  );
+});
+
+test("整组拖动对所有成员施加同一画布位移", () => {
+  assert.deepEqual(
+    objectGroupState.translateObjectGroup([
+      { key: "card:one", x: 20, y: 40, w: 120, h: 140 },
+      { key: "textbox:two", x: 180, y: 10, w: 200, h: 100 },
+    ], { x: 35, y: -12 }),
+    [
+      { key: "card:one", x: 55, y: 28, w: 120, h: 140 },
+      { key: "textbox:two", x: 215, y: -2, w: 200, h: 100 },
+    ],
+  );
+});
+
+test("整组缩放同时改变相对位置与成员尺寸", () => {
+  const result = objectGroupState.scaleObjectGroup([
+    { key: "card:one", x: 20, y: 40, w: 120, h: 140, minW: 56, minH: 76 },
+    { key: "textbox:two", x: 180, y: 10, w: 200, h: 100, minW: 140, minH: 60 },
+  ], 2);
+  assert.equal(result.scale, 2);
+  assert.deepEqual(result.objects, [
+    { key: "card:one", x: 20, y: 70, w: 240, h: 280, minW: 56, minH: 76 },
+    { key: "textbox:two", x: 340, y: 10, w: 400, h: 200, minW: 140, minH: 60 },
+  ]);
+});
+
+test("整组缩小时以最严格成员最小尺寸为统一下限", () => {
+  const result = objectGroupState.scaleObjectGroup([
+    { key: "image:one", x: 0, y: 0, w: 200, h: 100, minW: 80, minH: 40 },
+    { key: "textbox:two", x: 240, y: 0, w: 200, h: 100, minW: 140, minH: 60 },
+  ], 0.2);
+  assert.equal(result.scale, 0.7);
+  assert.equal(result.objects[0].w, 140);
+  assert.equal(result.objects[1].w, 140);
+});
 
 test("横图插入画布时按默认边界等比例缩小", () => {
   assert.deepEqual(imageState.fitImageWithin(1200, 800), { w: 360, h: 240 });
@@ -73,6 +155,16 @@ test("旧版内嵌画布数据在没有 images 字段时仍可读取", () => {
     ratings: [],
     height: 420,
   });
+});
+
+test("文内画布往返保留逻辑组合与评分缩放", () => {
+  const data = embedState.parseEmbedData(JSON.stringify({
+    items: [{ url: "https://one.example", title: "one", x: 1, y: 2, objectGroup: "og1" }],
+    ratings: [{ id: "r1", value: 4, x: 10, y: 20, scale: 1.5, objectGroup: "og1" }],
+  }));
+  assert.equal(data.items[0].objectGroup, "og1");
+  assert.equal(data.ratings[0].scale, 1.5);
+  assert.equal(data.ratings[0].objectGroup, "og1");
 });
 
 test("正文插入项生成可解析的空 web-desk 代码块", () => {

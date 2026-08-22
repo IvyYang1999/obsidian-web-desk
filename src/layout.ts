@@ -20,6 +20,7 @@ export function readCard(file: TFile, app: App, defaultSize: number): BookmarkCa
   const y = readNumber(fm.desk_y) ?? 0;
   const size = readNumber(fm.desk_size) ?? defaultSize;
   const group = typeof fm.desk_group === "string" ? fm.desk_group : "";
+  const objectGroup = typeof fm.desk_object_group === "string" ? fm.desk_object_group : "";
 
   let host = "";
   if (url) {
@@ -41,6 +42,7 @@ export function readCard(file: TFile, app: App, defaultSize: number): BookmarkCa
     y,
     size,
     group,
+    objectGroup,
     placed: typeof fm.desk_x === "number" || typeof fm.desk_y === "number",
   };
 }

@@ -14,6 +14,14 @@ import { ConfirmModal, TextInputModal } from "./modals";
 import { normalizeRatingValue, ratingLinkState } from "./rating-state";
 import { beginCanvasPointerSession } from "./canvas-pointer";
 import {
+  GroupObjectRect,
+  objectGroupBounds,
+  objectKey,
+  scaleObjectGroup,
+  splitObjectKey,
+  translateObjectGroup,
+} from "./object-group-state";
+import {
   arrowLine,
   arrowsWithoutEndpoint,
   cycleColor,
@@ -62,6 +70,12 @@ interface Point {
   y: number;
 }
 
+interface ViewObject extends GroupObjectRect {
+  kind: "card" | "image" | "textbox" | "rating";
+  id: string;
+  objectGroup: string;
+}
+
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 3;
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -77,6 +91,7 @@ export class WebDeskView extends ItemView {
 
   private cards: BookmarkCard[] = [];
   private iconEls = new Map<string, HTMLElement>();
+  private imageEls = new Map<string, HTMLElement>();
   private groupEls = new Map<string, HTMLElement>();
   private textBoxEls = new Map<string, HTMLElement>();
   private ratingEls = new Map<string, HTMLElement>();
@@ -88,6 +103,7 @@ export class WebDeskView extends ItemView {
   private pendingArrowStart = false;
   private editingTextBoxId: string | null = null;
   private selected = new Set<string>();
+  private objectSelectionEl: HTMLElement | null = null;
   private transform: CanvasTransform = { panX: 0, panY: 0, zoom: 1 };
 
   /** >0 表示有交互进行中（拖拽/导入），推迟重绘。 */
@@ -146,7 +162,7 @@ export class WebDeskView extends ItemView {
     this.hintEl.createDiv({ cls: "web-desk-hint-title", text: "网页桌面" });
     this.hintEl.createDiv({
       cls: "web-desk-hint-body",
-      text: "拖入网页链接或本地图片；Ctrl/Cmd+V 粘贴 URL、文本或图片。",
+      text: "拖入或粘贴内容；Shift 点选，多选后 Ctrl/Cmd+G 组合。",
     });
 
     const toolbar = this.rootEl.createDiv({ cls: "web-desk-toolbar" });
@@ -284,6 +300,7 @@ export class WebDeskView extends ItemView {
 
   private render(): void {
     this.iconEls.clear();
+    this.imageEls.clear();
     this.groupEls.clear();
     this.textBoxEls.clear();
     this.ratingEls.clear();
@@ -305,11 +322,12 @@ export class WebDeskView extends ItemView {
       this.cards.length === 0 && this.host.getImages().length === 0 && this.host.getRatings().length === 0
         ? "flex"
         : "none";
-    this.syncSelection();
+    this.render();
   }
 
   private renderIcon(card: BookmarkCard): void {
     const el = this.canvasEl.createDiv({ cls: "web-desk-icon" });
+    if (card.objectGroup) el.addClass("is-object-grouped");
     el.style.left = `${card.x}px`;
     el.style.top = `${card.y}px`;
     el.style.width = `${card.size + 24}px`;
@@ -470,9 +488,14 @@ export class WebDeskView extends ItemView {
       expand(image.x, image.y);
       expand(image.x + image.w, image.y + image.h);
     }
+    for (const box of this.host.getTextBoxes()) {
+      expand(box.x, box.y);
+      expand(box.x + box.w, box.y + box.h);
+    }
     for (const rating of this.host.getRatings()) {
+      const scale = rating.scale ?? 1;
       expand(rating.x, rating.y);
-      expand(rating.x + 208, rating.y + 86);
+      expand(rating.x + 208 * scale, rating.y + 86 * scale);
     }
 
     if (minX === Infinity) {
@@ -508,6 +531,7 @@ export class WebDeskView extends ItemView {
       target.closest(".web-desk-image") ||
       target.closest(".web-desk-textbox") ||
       target.closest(".web-desk-rating") ||
+      target.closest(".web-desk-object-selection") ||
       target.closest(".web-desk-toolbar")
     ) {
       return;
@@ -559,10 +583,14 @@ export class WebDeskView extends ItemView {
 
       const end = this.clientToCanvas(upEvent.clientX, upEvent.clientY);
       const rect = normalizeRect(start, end);
-      for (const card of this.cards) {
-        const cardRect = { x: card.x, y: card.y, w: card.size + 24, h: card.size + 44 };
-        if (rectsIntersect(rect, cardRect)) {
-          baseSelection.add(card.path);
+      const objects = this.allViewObjects();
+      for (const object of objects) {
+        if (rectsIntersect(rect, object)) baseSelection.add(object.key);
+      }
+      for (const object of objects) {
+        if (object.objectGroup && baseSelection.has(object.key)) {
+          objects.filter((entry) => entry.objectGroup === object.objectGroup)
+            .forEach((entry) => baseSelection.add(entry.key));
         }
       }
       this.selected = baseSelection;
@@ -596,8 +624,18 @@ export class WebDeskView extends ItemView {
     }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
       event.preventDefault();
-      this.selected = new Set(this.cards.map((card) => card.path));
+      this.selected = new Set(this.allViewObjects().map((object) => object.key));
       this.syncSelection();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "g") {
+      event.preventDefault();
+      this.ungroupSelectedObjects();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "g") {
+      event.preventDefault();
+      this.groupSelectedObjects();
     }
   }
 
@@ -607,7 +645,8 @@ export class WebDeskView extends ItemView {
       target.closest(".web-desk-icon") ||
       target.closest(".web-desk-group") ||
       target.closest(".web-desk-image") ||
-      target.closest(".web-desk-rating")
+      target.closest(".web-desk-rating") ||
+      target.closest(".web-desk-object-selection")
     ) {
       return;
     }
@@ -646,12 +685,13 @@ export class WebDeskView extends ItemView {
         .onClick(() => this.beginArrowFromScratch()),
     );
     menu.addSeparator();
+    this.appendObjectGroupMenu(menu);
     menu.addItem((item) =>
       item
         .setTitle("全选")
         .setIcon("box-select")
         .onClick(() => {
-          this.selected = new Set(this.cards.map((card) => card.path));
+          this.selected = new Set(this.allViewObjects().map((object) => object.key));
           this.syncSelection();
         }),
     );
@@ -673,84 +713,7 @@ export class WebDeskView extends ItemView {
     if (this.interceptArrowClick(event)) {
       return;
     }
-    event.stopPropagation();
-    this.rootEl.focus();
-
-    if (event.shiftKey) {
-      if (this.selected.has(card.path)) {
-        this.selected.delete(card.path);
-      } else {
-        this.selected.add(card.path);
-      }
-      this.syncSelection();
-      return;
-    }
-
-    if (!this.selected.has(card.path)) {
-      this.selected.clear();
-      this.selected.add(card.path);
-      this.syncSelection();
-    }
-
-    // 拖拽全程持锁：期间 vault 变化触发的 refresh 不得重建 DOM（否则拖拽悬空）
-    this.interactionLock += 1;
-    const startClient = { x: event.clientX, y: event.clientY };
-    const dragged = [...this.selected]
-      .map((path) => {
-        const target = this.cards.find((item) => item.path === path);
-        const iconEl = this.iconEls.get(path);
-        if (!target || !iconEl) {
-          return null;
-        }
-        return { card: target, el: iconEl, origin: { x: target.x, y: target.y } };
-      })
-      .filter(
-        (entry): entry is { card: BookmarkCard; el: HTMLElement; origin: Point } => entry !== null,
-      );
-
-    if (dragged.length === 0) {
-      this.interactionLock -= 1;
-      return;
-    }
-
-    let moved = false;
-    try { el.setPointerCapture(event.pointerId); } catch {}
-
-    const onMove = (moveEvent: PointerEvent): void => {
-      const dx = (moveEvent.clientX - startClient.x) / this.transform.zoom;
-      const dy = (moveEvent.clientY - startClient.y) / this.transform.zoom;
-      if (!moved && Math.hypot(dx, dy) * this.transform.zoom < 5) {
-        return;
-      }
-      moved = true;
-      for (const entry of dragged) {
-        entry.card.x = clamp(entry.origin.x + dx, -CANVAS_BOUND, CANVAS_BOUND);
-        entry.card.y = clamp(entry.origin.y + dy, -CANVAS_BOUND, CANVAS_BOUND);
-        entry.el.style.left = `${entry.card.x}px`;
-        entry.el.style.top = `${entry.card.y}px`;
-      }
-    };
-
-    const onUp = (): void => {
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
-      el.removeEventListener("pointercancel", onUp);
-
-      if (!moved) {
-        this.interactionLock -= 1;
-        this.activateCard(card);
-        return;
-      }
-      void this.persistDragged(
-        dragged.map((entry) => entry.card),
-      ).finally(() => {
-        this.interactionLock -= 1;
-      });
-    };
-
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
-    el.addEventListener("pointercancel", onUp);
+    this.onViewObjectPointerDown(event, card.path, el, () => this.activateCard(card));
   }
 
   private onIconResizePointerDown(
@@ -821,7 +784,7 @@ export class WebDeskView extends ItemView {
           y: card.y,
           group: group || null,
         });
-        this.layoutWrites.set(card.path, { x: card.x, y: card.y, at: Date.now() });
+        this.layoutWrites.set(card.path, { x: card.x, y: card.y, objectGroup: card.objectGroup, at: Date.now() });
       }
     } catch (error) {
       new Notice(`保存位置失败：${getErrorMessage(error)}`, 5000);
@@ -835,11 +798,7 @@ export class WebDeskView extends ItemView {
     event.preventDefault();
     event.stopPropagation();
 
-    if (!this.selected.has(card.path)) {
-      this.selected.clear();
-      this.selected.add(card.path);
-      this.syncSelection();
-    }
+    this.ensureObjectSelection(card.path);
 
     const menu = new Menu();
 
@@ -941,6 +900,9 @@ export class WebDeskView extends ItemView {
         .onClick(() => this.confirmDelete(card)),
     );
 
+    menu.addSeparator();
+    this.appendObjectGroupMenu(menu);
+
     menu.showAtMouseEvent(event);
   }
 
@@ -959,6 +921,7 @@ export class WebDeskView extends ItemView {
       x: card.x,
       y: card.y,
       size: card.size,
+      objectGroup: card.objectGroup,
       at: Date.now(),
     });
   }
@@ -966,7 +929,7 @@ export class WebDeskView extends ItemView {
   private async removeFromDesk(card: BookmarkCard): Promise<void> {
     const file = this.app.vault.getAbstractFileByPath(card.path);
     if (file instanceof TFile) {
-      await writeDeskFields(this.app, file, { x: null, y: null, size: null, group: null });
+      await writeDeskFields(this.app, file, { x: null, y: null, size: null, group: null, objectGroup: null });
     }
     this.selected.delete(card.path);
     await this.refresh();
@@ -974,7 +937,8 @@ export class WebDeskView extends ItemView {
   }
 
   private confirmDelete(card: BookmarkCard): void {
-    const paths = this.selected.has(card.path) ? [...this.selected] : [card.path];
+    const selectedPaths = this.selectedCardPaths();
+    const paths = this.selected.has(card.path) ? selectedPaths : [card.path];
     new ConfirmModal(this.app, {
       message: `删除 ${paths.length} 个收藏的 md 文件？（移入仓库回收站，图标随之消失）`,
       okLabel: "删除",
@@ -983,7 +947,7 @@ export class WebDeskView extends ItemView {
   }
 
   private confirmDeleteSelected(): void {
-    const paths = [...this.selected];
+    const paths = this.selectedCardPaths();
     if (paths.length === 0) {
       return;
     }
@@ -992,6 +956,11 @@ export class WebDeskView extends ItemView {
       okLabel: "删除",
       onOk: () => void this.deleteFiles(paths),
     }).open();
+  }
+
+  private selectedCardPaths(): string[] {
+    const available = new Set(this.cards.map((card) => card.path));
+    return [...this.selected].filter((key) => available.has(key));
   }
 
   private async deleteFiles(paths: string[]): Promise<void> {
@@ -1021,6 +990,355 @@ export class WebDeskView extends ItemView {
     for (const [path, el] of this.iconEls) {
       el.toggleClass("is-selected", this.selected.has(path));
     }
+    for (const [id, el] of this.imageEls) {
+      el.toggleClass("is-selected", this.selected.has(objectKey("image", id)));
+    }
+    for (const [id, el] of this.textBoxEls) {
+      el.toggleClass("is-selected", this.selected.has(objectKey("textbox", id)));
+    }
+    for (const [id, el] of this.ratingEls) {
+      el.toggleClass("is-selected", this.selected.has(objectKey("rating", id)));
+    }
+    this.renderObjectSelection();
+  }
+
+  private allViewObjects(): ViewObject[] {
+    return [
+      ...this.cards.map((card) => ({
+        key: card.path,
+        kind: "card" as const,
+        id: card.path,
+        objectGroup: card.objectGroup,
+        x: card.x,
+        y: card.y,
+        w: card.size + 24,
+        h: card.size + 44,
+        minW: 56,
+        minH: 76,
+        maxW: 344,
+        maxH: 364,
+      })),
+      ...this.host.getImages().map((image) => ({
+        key: objectKey("image", image.id),
+        kind: "image" as const,
+        id: image.id,
+        objectGroup: image.objectGroup ?? "",
+        x: image.x,
+        y: image.y,
+        w: image.w,
+        h: image.h,
+        minW: 80,
+        minH: image.h * (80 / image.w),
+      })),
+      ...this.host.getTextBoxes().map((box) => ({
+        key: objectKey("textbox", box.id),
+        kind: "textbox" as const,
+        id: box.id,
+        objectGroup: box.objectGroup ?? "",
+        x: box.x,
+        y: box.y,
+        w: box.w,
+        h: box.h,
+        minW: 140,
+        minH: 60,
+      })),
+      ...this.host.getRatings().map((rating) => {
+        const scale = rating.scale ?? 1;
+        return {
+          key: objectKey("rating", rating.id),
+          kind: "rating" as const,
+          id: rating.id,
+          objectGroup: rating.objectGroup ?? "",
+          x: rating.x,
+          y: rating.y,
+          w: 208 * scale,
+          h: 86 * scale,
+          minW: 104,
+          minH: 43,
+          maxW: 624,
+          maxH: 258,
+        };
+      }),
+    ];
+  }
+
+  private selectedViewObjects(): ViewObject[] {
+    return this.allViewObjects().filter((object) => this.selected.has(object.key));
+  }
+
+  private selectObject(key: string, additive: boolean): void {
+    const object = this.allViewObjects().find((entry) => entry.key === key);
+    if (!object) return;
+    const keys = object.objectGroup
+      ? this.allViewObjects().filter((entry) => entry.objectGroup === object.objectGroup).map((entry) => entry.key)
+      : [key];
+    if (!additive) this.selected.clear();
+    const remove = additive && keys.every((entry) => this.selected.has(entry));
+    for (const entry of keys) {
+      if (remove) this.selected.delete(entry);
+      else this.selected.add(entry);
+    }
+    this.clearArrowSelection();
+    this.syncSelection();
+  }
+
+  private ensureObjectSelection(key: string): void {
+    if (!this.selected.has(key)) this.selectObject(key, false);
+  }
+
+  private objectElement(object: ViewObject): HTMLElement | undefined {
+    if (object.kind === "card") return this.iconEls.get(object.id);
+    if (object.kind === "image") return this.imageEls.get(object.id);
+    if (object.kind === "textbox") return this.textBoxEls.get(object.id);
+    return this.ratingEls.get(object.id);
+  }
+
+  private applyObjectPosition(key: string, x: number, y: number): void {
+    const parsed = splitObjectKey(key);
+    if (!parsed) {
+      const card = this.cards.find((entry) => entry.path === key);
+      if (card) { card.x = x; card.y = y; }
+      const el = this.iconEls.get(key);
+      if (el) { el.style.left = `${x}px`; el.style.top = `${y}px`; }
+      return;
+    }
+    const collection = parsed.kind === "image"
+      ? this.host.getImages()
+      : parsed.kind === "textbox"
+        ? this.host.getTextBoxes()
+        : parsed.kind === "rating"
+          ? this.host.getRatings()
+          : [];
+    const item = collection.find((entry) => entry.id === parsed.id);
+    if (item) { item.x = x; item.y = y; }
+    const object = this.allViewObjects().find((entry) => entry.key === key);
+    const el = object ? this.objectElement(object) : undefined;
+    if (el) { el.style.left = `${x}px`; el.style.top = `${y}px`; }
+  }
+
+  private applyObjectScale(origin: ViewObject, x: number, y: number, scale: number): void {
+    this.applyObjectPosition(origin.key, x, y);
+    if (origin.kind === "card") {
+      const card = this.cards.find((entry) => entry.path === origin.id);
+      if (!card) return;
+      card.size = clamp(Math.round((origin.w - 24) * scale), 32, 320);
+      const el = this.iconEls.get(origin.id);
+      if (el) updateIconElementSize(el, card.size);
+      return;
+    }
+    if (origin.kind === "image") {
+      const image = this.host.getImages().find((entry) => entry.id === origin.id);
+      if (!image) return;
+      image.w = Math.round(origin.w * scale);
+      image.h = Math.round(origin.h * scale);
+      const el = this.imageEls.get(origin.id);
+      if (el) { el.style.width = `${image.w}px`; el.style.height = `${image.h}px`; }
+      return;
+    }
+    if (origin.kind === "textbox") {
+      const box = this.host.getTextBoxes().find((entry) => entry.id === origin.id);
+      if (!box) return;
+      box.w = Math.round(origin.w * scale);
+      box.h = Math.round(origin.h * scale);
+      const el = this.textBoxEls.get(origin.id);
+      if (el) { el.style.width = `${box.w}px`; el.style.height = `${box.h}px`; }
+      return;
+    }
+    const rating = this.host.getRatings().find((entry) => entry.id === origin.id);
+    if (!rating) return;
+    rating.scale = clamp((origin.w / 208) * scale, 0.5, 3);
+    const el = this.ratingEls.get(origin.id);
+    if (el) el.style.transform = `scale(${rating.scale})`;
+  }
+
+  private renderObjectSelection(): void {
+    this.objectSelectionEl?.remove();
+    this.objectSelectionEl = null;
+    const objects = this.selectedViewObjects();
+    if (objects.length < 2) return;
+    const bounds = objectGroupBounds(objects);
+    if (!bounds) return;
+    const el = this.canvasEl.createDiv({ cls: "web-desk-object-selection" });
+    el.style.left = `${bounds.x}px`;
+    el.style.top = `${bounds.y}px`;
+    el.style.width = `${bounds.w}px`;
+    el.style.height = `${bounds.h}px`;
+    const groupId = objects[0].objectGroup;
+    const fullGroup = Boolean(groupId) && objects.every((object) => object.objectGroup === groupId) &&
+      this.allViewObjects().filter((object) => object.objectGroup === groupId).length === objects.length;
+    if (fullGroup) {
+      const handle = el.createDiv({ cls: "web-desk-object-selection-resize" });
+      handle.setAttribute("aria-label", "缩放组合");
+      handle.addEventListener("pointerdown", (event) => this.onObjectGroupResizePointerDown(event, handle));
+    } else {
+      el.addClass("is-multiselect");
+    }
+    this.objectSelectionEl = el;
+  }
+
+  private onObjectGroupResizePointerDown(event: PointerEvent, handle: HTMLElement): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const origins = this.selectedViewObjects();
+    const bounds = objectGroupBounds(origins);
+    if (!bounds || origins.length < 2) return;
+    this.interactionLock += 1;
+    beginCanvasPointerSession({
+      event,
+      element: handle,
+      zoom: () => this.transform.zoom,
+      resizing: true,
+      onMove: (delta) => {
+        const relativeX = delta.x / Math.max(bounds.w, 1);
+        const relativeY = delta.y / Math.max(bounds.h, 1);
+        const requested = 1 + (Math.abs(relativeX) >= Math.abs(relativeY) ? relativeX : relativeY);
+        const result = scaleObjectGroup(origins, requested);
+        result.objects.forEach((object, index) => {
+          this.applyObjectScale(origins[index], object.x, object.y, result.scale);
+        });
+        this.renderArrows();
+        this.updateObjectSelectionFrame();
+      },
+      onEnd: (moved) => {
+        this.interactionLock -= 1;
+        if (moved) void this.persistScaledObjects(this.selectedViewObjects());
+      },
+    });
+  }
+
+  private updateObjectSelectionFrame(): void {
+    if (!this.objectSelectionEl) return;
+    const bounds = objectGroupBounds(this.selectedViewObjects());
+    if (!bounds) return;
+    this.objectSelectionEl.style.left = `${bounds.x}px`;
+    this.objectSelectionEl.style.top = `${bounds.y}px`;
+    this.objectSelectionEl.style.width = `${bounds.w}px`;
+    this.objectSelectionEl.style.height = `${bounds.h}px`;
+  }
+
+  private async persistScaledObjects(objects: ViewObject[]): Promise<void> {
+    try {
+      for (const object of objects.filter((entry) => entry.kind === "card")) {
+        const card = this.cards.find((entry) => entry.path === object.id);
+        const file = this.app.vault.getAbstractFileByPath(object.id);
+        if (!card || !(file instanceof TFile)) continue;
+        await writeDeskFields(this.app, file, { x: card.x, y: card.y, size: card.size });
+        this.layoutWrites.set(card.path, { x: card.x, y: card.y, size: card.size, objectGroup: card.objectGroup, at: Date.now() });
+      }
+      if (objects.some((entry) => entry.kind === "image")) this.host.setImages(this.host.getImages());
+      if (objects.some((entry) => entry.kind === "textbox")) this.host.setTextBoxes(this.host.getTextBoxes());
+      if (objects.some((entry) => entry.kind === "rating")) this.host.setRatings(this.host.getRatings());
+    } catch (error) {
+      new Notice(`保存组合缩放失败：${getErrorMessage(error)}`, 5000);
+    }
+    this.renderObjectSelection();
+  }
+
+  private async setSelectedObjectGroup(groupId: string): Promise<void> {
+    const objects = this.selectedViewObjects();
+    if (groupId && objects.length < 2) {
+      new Notice("请先多选至少两个元素");
+      return;
+    }
+    this.interactionLock += 1;
+    try {
+      for (const object of objects) {
+        if (object.kind === "card") {
+          const card = this.cards.find((entry) => entry.path === object.id);
+          const file = this.app.vault.getAbstractFileByPath(object.id);
+          if (!card || !(file instanceof TFile)) continue;
+          card.objectGroup = groupId;
+          await writeDeskFields(this.app, file, { objectGroup: groupId || null });
+          this.layoutWrites.set(card.path, { x: card.x, y: card.y, size: card.size, objectGroup: groupId, at: Date.now() });
+        } else if (object.kind === "image") {
+          const image = this.host.getImages().find((entry) => entry.id === object.id);
+          if (image) image.objectGroup = groupId || undefined;
+        } else if (object.kind === "textbox") {
+          const box = this.host.getTextBoxes().find((entry) => entry.id === object.id);
+          if (box) box.objectGroup = groupId || undefined;
+        } else {
+          const rating = this.host.getRatings().find((entry) => entry.id === object.id);
+          if (rating) rating.objectGroup = groupId || undefined;
+        }
+      }
+      this.host.setImages(this.host.getImages());
+      this.host.setTextBoxes(this.host.getTextBoxes());
+      this.host.setRatings(this.host.getRatings());
+    } catch (error) {
+      new Notice(`保存组合失败：${getErrorMessage(error)}`, 5000);
+    } finally {
+      this.interactionLock -= 1;
+    }
+    this.render();
+  }
+
+  private groupSelectedObjects(): void {
+    void this.setSelectedObjectGroup(`og${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`);
+  }
+
+  private ungroupSelectedObjects(): void {
+    if (!this.selectedViewObjects().some((object) => object.objectGroup)) return;
+    void this.setSelectedObjectGroup("");
+  }
+
+  private appendObjectGroupMenu(menu: Menu): void {
+    const objects = this.selectedViewObjects();
+    if (objects.length >= 2) {
+      menu.addItem((item) => item.setTitle("组合所选元素").setIcon("combine").onClick(() => this.groupSelectedObjects()));
+    }
+    if (objects.some((object) => object.objectGroup)) {
+      menu.addItem((item) => item.setTitle("取消组合").setIcon("ungroup").onClick(() => this.ungroupSelectedObjects()));
+    }
+  }
+
+  private onViewObjectPointerDown(
+    event: PointerEvent,
+    key: string,
+    el: HTMLElement,
+    activate?: () => void,
+  ): void {
+    event.stopPropagation();
+    this.rootEl.focus();
+    if (event.shiftKey) {
+      this.selectObject(key, true);
+      return;
+    }
+    this.ensureObjectSelection(key);
+    const origins = this.selectedViewObjects();
+    if (origins.length === 0) return;
+    this.interactionLock += 1;
+    beginCanvasPointerSession({
+      event,
+      element: el,
+      zoom: () => this.transform.zoom,
+      onMove: (delta) => {
+        const translated = translateObjectGroup(origins, delta);
+        for (const object of translated) this.applyObjectPosition(object.key, object.x, object.y);
+        this.renderArrows();
+        this.renderObjectSelection();
+      },
+      onEnd: (moved) => {
+        this.interactionLock -= 1;
+        if (!moved) {
+          activate?.();
+          return;
+        }
+        void this.persistMovedObjects(this.selectedViewObjects());
+      },
+    });
+  }
+
+  private async persistMovedObjects(objects: ViewObject[]): Promise<void> {
+    const cards = objects
+      .filter((object) => object.kind === "card")
+      .map((object) => this.cards.find((card) => card.path === object.id))
+      .filter((card): card is BookmarkCard => Boolean(card));
+    if (cards.length > 0) await this.persistDragged(cards);
+    if (objects.some((object) => object.kind === "image")) this.host.setImages(this.host.getImages());
+    if (objects.some((object) => object.kind === "textbox")) this.host.setTextBoxes(this.host.getTextBoxes());
+    if (objects.some((object) => object.kind === "rating")) this.host.setRatings(this.host.getRatings());
+    this.renderObjectSelection();
   }
 
   // ---------- 分组 ----------
@@ -1411,6 +1729,7 @@ export class WebDeskView extends ItemView {
   private renderTextBoxes(): void {
     for (const box of this.host.getTextBoxes()) {
       const el = this.canvasEl.createDiv({ cls: "web-desk-textbox" });
+      if (box.objectGroup) el.addClass("is-object-grouped");
       el.style.left = `${box.x}px`;
       el.style.top = `${box.y}px`;
       el.style.width = `${box.w}px`;
@@ -1451,8 +1770,11 @@ export class WebDeskView extends ItemView {
       const el = this.canvasEl.createDiv({
         cls: `web-desk-rating is-${state}`,
       });
+      if (rating.objectGroup) el.addClass("is-object-grouped");
       el.style.left = `${rating.x}px`;
       el.style.top = `${rating.y}px`;
+      el.style.transform = `scale(${rating.scale ?? 1})`;
+      el.style.transformOrigin = "top left";
       el.setAttribute("data-rating-id", rating.id);
 
       const header = el.createDiv({ cls: "web-desk-rating-header" });
@@ -1519,38 +1841,13 @@ export class WebDeskView extends ItemView {
 
   private onRatingPointerDown(event: PointerEvent, rating: Rating, el: HTMLElement): void {
     if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
-    event.stopPropagation();
-    this.rootEl.focus();
-    this.interactionLock += 1;
-    const start = { x: event.clientX, y: event.clientY };
-    const origin = { x: rating.x, y: rating.y };
-    let moved = false;
-    try { el.setPointerCapture(event.pointerId); } catch {}
-    const onMove = (moveEvent: PointerEvent): void => {
-      const dx = (moveEvent.clientX - start.x) / this.transform.zoom;
-      const dy = (moveEvent.clientY - start.y) / this.transform.zoom;
-      if (!moved && Math.hypot(dx, dy) * this.transform.zoom < 4) return;
-      moved = true;
-      rating.x = Math.round(origin.x + dx);
-      rating.y = Math.round(origin.y + dy);
-      el.style.left = `${rating.x}px`;
-      el.style.top = `${rating.y}px`;
-    };
-    const onUp = (): void => {
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
-      el.removeEventListener("pointercancel", onUp);
-      this.interactionLock -= 1;
-      if (moved) this.host.setRatings(this.host.getRatings());
-    };
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
-    el.addEventListener("pointercancel", onUp);
+    this.onViewObjectPointerDown(event, objectKey("rating", rating.id), el);
   }
 
   private onRatingContextMenu(event: MouseEvent, rating: Rating): void {
     event.preventDefault();
     event.stopPropagation();
+    this.ensureObjectSelection(objectKey("rating", rating.id));
     const menu = new Menu();
     if (rating.link) {
       menu.addItem((item) =>
@@ -1568,12 +1865,15 @@ export class WebDeskView extends ItemView {
         this.render();
       }),
     );
+    menu.addSeparator();
+    this.appendObjectGroupMenu(menu);
     menu.showAtMouseEvent(event);
   }
 
   private renderImages(): void {
     for (const image of this.host.getImages()) {
       const el = this.canvasEl.createDiv({ cls: "web-desk-image" });
+      if (image.objectGroup) el.addClass("is-object-grouped");
       el.style.left = `${image.x}px`;
       el.style.top = `${image.y}px`;
       el.style.width = `${image.w}px`;
@@ -1597,39 +1897,13 @@ export class WebDeskView extends ItemView {
       handle.addEventListener("pointerdown", (event) =>
         this.onImageResizePointerDown(event, image, el),
       );
+      this.imageEls.set(image.id, el);
     }
   }
 
   private onImagePointerDown(event: PointerEvent, image: CanvasImage, el: HTMLElement): void {
     if (event.button !== 0 || (event.target as HTMLElement).closest(".web-desk-image-resize")) return;
-    event.stopPropagation();
-    this.rootEl.focus();
-    this.interactionLock += 1;
-    const start = { x: event.clientX, y: event.clientY };
-    const origin = { x: image.x, y: image.y };
-    let moved = false;
-    try { el.setPointerCapture(event.pointerId); } catch {}
-
-    const onMove = (moveEvent: PointerEvent): void => {
-      const dx = (moveEvent.clientX - start.x) / this.transform.zoom;
-      const dy = (moveEvent.clientY - start.y) / this.transform.zoom;
-      if (!moved && Math.hypot(dx, dy) * this.transform.zoom < 4) return;
-      moved = true;
-      image.x = Math.round(origin.x + dx);
-      image.y = Math.round(origin.y + dy);
-      el.style.left = `${image.x}px`;
-      el.style.top = `${image.y}px`;
-    };
-    const onUp = (): void => {
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
-      el.removeEventListener("pointercancel", onUp);
-      this.interactionLock -= 1;
-      if (moved) this.host.setImages(this.host.getImages());
-    };
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
-    el.addEventListener("pointercancel", onUp);
+    this.onViewObjectPointerDown(event, objectKey("image", image.id), el);
   }
 
   private onImageResizePointerDown(
@@ -1677,6 +1951,7 @@ export class WebDeskView extends ItemView {
   private onImageContextMenu(event: MouseEvent, image: CanvasImage): void {
     event.preventDefault();
     event.stopPropagation();
+    this.ensureObjectSelection(objectKey("image", image.id));
     const menu = new Menu();
     menu.addItem((item) =>
       item.setTitle("打开图片文件").setIcon("image").onClick(() => {
@@ -1694,6 +1969,8 @@ export class WebDeskView extends ItemView {
           this.render();
         }),
     );
+    menu.addSeparator();
+    this.appendObjectGroupMenu(menu);
     menu.showAtMouseEvent(event);
   }
 
@@ -1704,27 +1981,7 @@ export class WebDeskView extends ItemView {
     if (event.button !== 0 || this.editingTextBoxId === box.id) {
       return;
     }
-    event.stopPropagation();
-    this.rootEl.focus();
-
-    this.interactionLock += 1;
-    const origin = { x: box.x, y: box.y };
-    beginCanvasPointerSession({
-      event,
-      element: el,
-      zoom: () => this.transform.zoom,
-      onMove: (delta) => {
-        box.x = Math.round(origin.x + delta.x);
-        box.y = Math.round(origin.y + delta.y);
-        el.style.left = `${box.x}px`;
-        el.style.top = `${box.y}px`;
-        this.renderArrows();
-      },
-      onEnd: (moved) => {
-        this.interactionLock -= 1;
-        if (moved) this.host.setTextBoxes(this.host.getTextBoxes());
-      },
-    });
+    this.onViewObjectPointerDown(event, objectKey("textbox", box.id), el);
   }
 
   private onTextBoxResizePointerDown(event: PointerEvent, box: TextBox, el: HTMLElement): void {
@@ -1793,6 +2050,7 @@ export class WebDeskView extends ItemView {
   }
 
   private onTextBoxContextMenu(event: MouseEvent, box: TextBox, textEl: HTMLElement): void {
+    this.ensureObjectSelection(objectKey("textbox", box.id));
     const menu = new Menu();
     menu.addItem((item) =>
       item
@@ -1827,6 +2085,8 @@ export class WebDeskView extends ItemView {
         .setIcon("trash-2")
         .onClick(() => this.removeTextBox(box.id)),
     );
+    menu.addSeparator();
+    this.appendObjectGroupMenu(menu);
     menu.showAtMouseEvent(event);
   }
 

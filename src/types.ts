@@ -20,6 +20,8 @@ export interface TextBox {
   w: number;
   h: number;
   color: string;
+  /** Figma 式逻辑组合；与分类分组框无关。 */
+  objectGroup?: string;
 }
 
 /** 画布图片：文件本体在 Vault，这里只保存相对路径与布局。 */
@@ -30,6 +32,7 @@ export interface CanvasImage {
   y: number;
   w: number;
   h: number;
+  objectGroup?: string;
 }
 
 /** 评分可独立存在，也可保存一个网页引用；引用失效时保留评分本身。 */
@@ -45,6 +48,9 @@ export interface Rating {
   x: number;
   y: number;
   link?: RatingLink;
+  /** 评分没有独立缩放手柄；组合缩放通过该比例持久化。 */
+  scale?: number;
+  objectGroup?: string;
 }
 
 /** 两种画布共享的组件协议；宿主只负责决定写入 data.json 还是代码块 JSON。 */
@@ -104,6 +110,7 @@ export interface BookmarkCard {
   y: number;
   size: number;
   group: string;
+  objectGroup: string;
   /** 是否有手动布局（frontmatter 里有 desk_x/desk_y）。 */
   placed: boolean;
 }

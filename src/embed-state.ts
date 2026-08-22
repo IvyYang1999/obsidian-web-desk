@@ -9,6 +9,7 @@ export interface EmbedItem {
   y: number;
   size?: number;
   group?: string;
+  objectGroup?: string;
 }
 
 export type EmbedTextBox = TextBox;
