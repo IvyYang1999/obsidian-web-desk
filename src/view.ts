@@ -369,20 +369,18 @@ export class WebDeskView extends ItemView {
     const header = el.createDiv({ cls: "web-desk-group-header" });
     header.style.color = group.color;
     header.createSpan({ text: group.name });
-    header.addEventListener("pointerdown", (event) =>
-      this.onGroupHeaderPointerDown(event, group),
-    );
     header.addEventListener("dblclick", (event) => {
       event.stopPropagation();
       this.renameGroup(group);
     });
-    header.addEventListener("contextmenu", (event) => {
-      event.stopPropagation();
-      this.onGroupContextMenu(event, group);
-    });
 
     const handle = el.createDiv({ cls: "web-desk-group-resize" });
     handle.addEventListener("pointerdown", (event) => this.onGroupResizePointerDown(event, group));
+    el.addEventListener("pointerdown", (event) => this.onGroupPointerDown(event, group));
+    el.addEventListener("contextmenu", (event) => {
+      event.stopPropagation();
+      this.onGroupContextMenu(event, group);
+    });
 
     el.setAttribute("data-group-id", group.id);
     this.groupEls.set(group.id, el);
@@ -1050,7 +1048,7 @@ export class WebDeskView extends ItemView {
     }).open();
   }
 
-  private onGroupHeaderPointerDown(event: PointerEvent, group: GroupBox): void {
+  private onGroupPointerDown(event: PointerEvent, group: GroupBox): void {
     if (this.interceptArrowClick(event)) {
       return;
     }

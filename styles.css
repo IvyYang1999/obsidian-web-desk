@@ -139,9 +139,14 @@
   position: absolute;
   border: 2px dashed;
   border-radius: var(--wd-radius-lg);
-  /* 背景留在网页元素下方；标题和手柄单独进入上层，避免被图标遮住后无法操作。 */
+  /* 分组底板接管空白区拖动；网页、图片等组件靠各自 z-index 保持独立操作。 */
   z-index: auto;
-  pointer-events: none;
+  cursor: grab;
+  pointer-events: auto;
+}
+
+.web-desk-group:active {
+  cursor: grabbing;
 }
 
 .web-desk-group-header {
@@ -180,6 +185,11 @@
 .web-desk-group-resize {
   pointer-events: auto;
   z-index: 12;
+}
+
+/* 箭头可跨过分组底板被选中，但仍位于网页、图片和文本框之下。 */
+.web-desk-arrows {
+  z-index: 5;
 }
 
 .web-desk-icon-resize {

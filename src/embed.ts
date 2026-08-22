@@ -291,15 +291,15 @@ export class DeskEmbed {
     const header = el.createDiv({ cls: "web-desk-group-header" });
     header.style.color = group.color;
     header.createSpan({ text: group.name });
-    header.addEventListener("pointerdown", (event) => this.onGroupPointerDown(event, group, el));
     header.addEventListener("dblclick", (event) => {
       event.stopPropagation();
       this.renameGroup(group);
     });
-    header.addEventListener("contextmenu", (event) => this.onGroupContextMenu(event, group));
 
     const handle = el.createDiv({ cls: "web-desk-group-resize" });
     handle.addEventListener("pointerdown", (event) => this.onGroupResizePointerDown(event, group, el));
+    el.addEventListener("pointerdown", (event) => this.onGroupPointerDown(event, group, el));
+    el.addEventListener("contextmenu", (event) => this.onGroupContextMenu(event, group));
     this.groupEls.set(group.id, el);
   }
 
