@@ -755,6 +755,7 @@ export class WebDeskView extends ItemView {
     event.stopPropagation();
     this.rootEl.focus();
     this.interactionLock += 1;
+    el.addClass("is-resizing");
     const start = { x: event.clientX, y: event.clientY };
     const origin = card.size;
     let moved = false;
@@ -772,6 +773,7 @@ export class WebDeskView extends ItemView {
       el.removeEventListener("pointermove", onMove);
       el.removeEventListener("pointerup", onUp);
       el.removeEventListener("pointercancel", onUp);
+      el.removeClass("is-resizing");
       if (!moved) {
         this.interactionLock -= 1;
         return;
@@ -1108,6 +1110,7 @@ export class WebDeskView extends ItemView {
     }
 
     this.interactionLock += 1;
+    el.addClass("is-resizing");
     const startClient = { x: event.clientX, y: event.clientY };
     const origin = { w: group.w, h: group.h };
     let moved = false;
@@ -1130,6 +1133,8 @@ export class WebDeskView extends ItemView {
     const onUp = (): void => {
       el.removeEventListener("pointermove", onMove);
       el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
+      el.removeClass("is-resizing");
       this.interactionLock -= 1;
       if (moved) {
         this.host.setGroups(this.host.getGroups());
@@ -1140,6 +1145,7 @@ export class WebDeskView extends ItemView {
 
     el.addEventListener("pointermove", onMove);
     el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
   }
 
   private onGroupContextMenu(event: MouseEvent, group: GroupBox): void {
@@ -1681,6 +1687,7 @@ export class WebDeskView extends ItemView {
     event.preventDefault();
     event.stopPropagation();
     this.interactionLock += 1;
+    el.addClass("is-resizing");
     const start = { x: event.clientX, y: event.clientY };
     const origin = { w: image.w, h: image.h };
     let moved = false;
@@ -1704,6 +1711,7 @@ export class WebDeskView extends ItemView {
       el.removeEventListener("pointermove", onMove);
       el.removeEventListener("pointerup", onUp);
       el.removeEventListener("pointercancel", onUp);
+      el.removeClass("is-resizing");
       this.interactionLock -= 1;
       if (moved) this.host.setImages(this.host.getImages());
     };
@@ -1786,6 +1794,7 @@ export class WebDeskView extends ItemView {
     event.stopPropagation();
 
     this.interactionLock += 1;
+    el.addClass("is-resizing");
     const startClient = { x: event.clientX, y: event.clientY };
     const origin = { w: box.w, h: box.h };
     let moved = false;
@@ -1808,6 +1817,8 @@ export class WebDeskView extends ItemView {
     const onUp = (): void => {
       el.removeEventListener("pointermove", onMove);
       el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
+      el.removeClass("is-resizing");
       this.interactionLock -= 1;
       if (moved) {
         this.host.setTextBoxes(this.host.getTextBoxes());
@@ -1817,6 +1828,7 @@ export class WebDeskView extends ItemView {
 
     el.addEventListener("pointermove", onMove);
     el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
   }
 
   private editTextBox(box: TextBox, textEl: HTMLElement): void {

@@ -342,6 +342,7 @@ export class DeskEmbed {
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
+    el.addClass("is-resizing");
     const start = { x: event.clientX, y: event.clientY };
     const origin = { w: image.w, h: image.h };
     let moved = false;
@@ -364,6 +365,7 @@ export class DeskEmbed {
       el.removeEventListener("pointermove", onMove);
       el.removeEventListener("pointerup", onUp);
       el.removeEventListener("pointercancel", onUp);
+      el.removeClass("is-resizing");
       if (moved) this.scheduleWrite();
     };
     el.addEventListener("pointermove", onMove);
@@ -545,6 +547,7 @@ export class DeskEmbed {
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
+    el.addClass("is-resizing");
     const start = { x: event.clientX, y: event.clientY };
     const origin = item.size ?? 96;
     let moved = false;
@@ -562,6 +565,7 @@ export class DeskEmbed {
       el.removeEventListener("pointermove", onMove);
       el.removeEventListener("pointerup", onUp);
       el.removeEventListener("pointercancel", onUp);
+      el.removeClass("is-resizing");
       if (moved) this.scheduleWrite();
     };
     el.addEventListener("pointermove", onMove);

@@ -53,6 +53,28 @@
   z-index: 10;
 }
 
+/* 调整大小时把选择环画在组件内部且置于内容之上，避免被相邻 block 或画布裁剪。 */
+.web-desk-icon.is-resizing,
+.web-desk-group.is-resizing,
+.web-desk-textbox.is-resizing,
+.web-desk-image.is-resizing {
+  z-index: 25;
+}
+
+.web-desk-icon.is-resizing::after,
+.web-desk-group.is-resizing::after,
+.web-desk-textbox.is-resizing::after,
+.web-desk-image.is-resizing::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  box-sizing: border-box;
+  border: 2px dashed var(--interactive-accent);
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 4;
+}
+
 .web-desk-icon:active {
   cursor: grabbing;
 }
@@ -260,6 +282,20 @@
   background-size: 24px 24px;
   user-select: none;
   -webkit-user-select: none;
+  outline: none;
+  isolation: isolate;
+}
+
+/* 默认焦点 outline 绘制在元素外侧，容易被 Obsidian 的代码块容器裁掉。 */
+.web-desk-embed:focus-visible::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  box-sizing: border-box;
+  border: 2px dashed var(--interactive-accent);
+  border-radius: calc(var(--wd-radius-lg) - 2px);
+  pointer-events: none;
+  z-index: 31;
 }
 
 .web-desk-embed-canvas {
