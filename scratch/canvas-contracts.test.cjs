@@ -42,6 +42,11 @@ test("文内画布包装层 hover 与 focus 不生成第二层圆角", () => {
   assert.match(css, /box-shadow:\s*none\s*!important/);
 });
 
+test("真实图片的 contain 留白透明，不在圆角两侧生成白色耳朵", () => {
+  const css = fs.readFileSync("styles.css", "utf8");
+  assert.match(css, /\.web-desk-image-content\s*\{[^}]*object-fit:\s*contain;[^}]*background-color:\s*transparent;/s);
+});
+
 function pointerEvent(type, { x, y, pointerId = 1 }) {
   const event = new Event(type);
   Object.defineProperties(event, {

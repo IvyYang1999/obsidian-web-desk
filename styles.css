@@ -582,6 +582,8 @@
 
 .web-desk-image-content {
   object-fit: contain;
+  /* 细小的宽高取整差会产生 contain 留白；透明可避免圆角两侧露出白色“耳朵”。 */
+  background-color: transparent;
   pointer-events: none;
 }
 
