@@ -341,14 +341,19 @@
 
 /* 笔记内嵌画布 */
 .web-desk-embed-host,
-.markdown-rendered pre:has(> .web-desk-embed-host),
-.markdown-source-view .cm-embed-block:has(.web-desk-embed-host) {
+.markdown-rendered pre:has(.web-desk-embed-host),
+.markdown-source-view .cm-embed-block:has(.web-desk-embed-host),
+.markdown-rendered pre:has(.web-desk-embed-host):hover,
+.markdown-rendered pre:has(.web-desk-embed-host):focus-within,
+.markdown-source-view .cm-embed-block:has(.web-desk-embed-host):hover,
+.markdown-source-view .cm-embed-block:has(.web-desk-embed-host):focus-within {
   margin: 0;
   padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
+  border: 0 !important;
+  border-radius: 0 !important;
+  outline: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 .web-desk-embed {

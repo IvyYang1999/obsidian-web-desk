@@ -34,6 +34,14 @@ test("分类分组框缩放时只保留自身虚线边缘", () => {
   assert.match(css, /\.web-desk-embed:focus-visible:not\(\.is-pointer-focused\)::after/);
 });
 
+test("文内画布包装层 hover 与 focus 不生成第二层圆角", () => {
+  const css = fs.readFileSync("styles.css", "utf8");
+  assert.match(css, /\.cm-embed-block:has\(\.web-desk-embed-host\):hover/);
+  assert.match(css, /\.cm-embed-block:has\(\.web-desk-embed-host\):focus-within/);
+  assert.match(css, /border-radius:\s*0\s*!important/);
+  assert.match(css, /box-shadow:\s*none\s*!important/);
+});
+
 function pointerEvent(type, { x, y, pointerId = 1 }) {
   const event = new Event(type);
   Object.defineProperties(event, {
