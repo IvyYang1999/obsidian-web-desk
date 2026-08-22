@@ -47,6 +47,15 @@ export interface Rating {
   link?: RatingLink;
 }
 
+/** 两种画布共享的组件协议；宿主只负责决定写入 data.json 还是代码块 JSON。 */
+export interface CanvasComponents {
+  images: CanvasImage[];
+  textboxes: TextBox[];
+  groups: GroupBox[];
+  arrows: Arrow[];
+  ratings: Rating[];
+}
+
 /** 箭头端点：card=md路径 / textbox·group=id / point="x,y"。 */
 export type ArrowEndpointKind = "card" | "textbox" | "group" | "point";
 

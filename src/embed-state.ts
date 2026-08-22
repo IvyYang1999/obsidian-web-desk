@@ -1,4 +1,5 @@
-import type { CanvasImage, Rating } from "./types";
+import { GROUP_COLORS } from "./types";
+import type { CanvasComponents, TextBox } from "./types";
 
 export interface EmbedItem {
   url: string;
@@ -7,23 +8,13 @@ export interface EmbedItem {
   x: number;
   y: number;
   size?: number;
+  group?: string;
 }
 
-export interface EmbedTextBox {
-  id: string;
-  text: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  color?: string;
-}
+export type EmbedTextBox = TextBox;
 
-export interface EmbedData {
+export interface EmbedData extends CanvasComponents {
   items: EmbedItem[];
-  images: CanvasImage[];
-  textboxes?: EmbedTextBox[];
-  ratings?: Rating[];
 }
 
 interface EmbedRect {
@@ -62,7 +53,7 @@ function findAvailableEmbedPosition(
       w: item.size ?? 96,
       h: (item.size ?? 96) + 42,
     })),
-    ...data.images.map((image) => ({ x: image.x, y: image.y, w: image.w, h: image.h })),
+    ...(data.images ?? []).map((image) => ({ x: image.x, y: image.y, w: image.w, h: image.h })),
     ...(data.textboxes ?? []).map((box) => ({ x: box.x, y: box.y, w: box.w, h: box.h })),
     ...(data.ratings ?? []).map((rating) => ({ x: rating.x, y: rating.y, w: 208, h: 86 })),
   ];
@@ -104,30 +95,43 @@ function findAvailableEmbedPosition(
   return { x: Math.round(desired.x), y: Math.round(desired.y) };
 }
 
+export function emptyEmbedData(): EmbedData {
+  return { items: [], images: [], textboxes: [], groups: [], arrows: [], ratings: [] };
+}
+
 export function parseEmbedData(source: string): EmbedData {
   const trimmed = source.trim();
-  if (!trimmed) return { items: [], images: [] };
+  if (!trimmed) return emptyEmbedData();
   try {
     const parsed = JSON.parse(trimmed) as Partial<EmbedData>;
     if (Array.isArray(parsed?.items)) {
       const data: EmbedData = {
         items: parsed.items,
         images: Array.isArray(parsed.images) ? parsed.images : [],
+        textboxes: Array.isArray(parsed.textboxes)
+          ? parsed.textboxes.map((box, index) => ({
+            ...box,
+            color: typeof box.color === "string"
+              ? box.color
+              : GROUP_COLORS[index % GROUP_COLORS.length],
+          }))
+          : [],
+        groups: Array.isArray(parsed.groups) ? parsed.groups : [],
+        arrows: Array.isArray(parsed.arrows) ? parsed.arrows : [],
+        ratings: Array.isArray(parsed.ratings) ? parsed.ratings : [],
       };
-      if (Array.isArray(parsed.textboxes)) data.textboxes = parsed.textboxes;
-      if (Array.isArray(parsed.ratings)) data.ratings = parsed.ratings;
       return data;
     }
   } catch {
     // 坏数据保持可渲染；原文不会在没有用户编辑时被覆盖。
   }
-  return { items: [], images: [] };
+  return emptyEmbedData();
 }
 
 export function createEmptyEmbedBlock(): string {
   return [
     "```web-desk",
-    JSON.stringify({ items: [], images: [], textboxes: [], ratings: [] }),
+    JSON.stringify(emptyEmbedData()),
     "```",
   ].join("\n");
 }

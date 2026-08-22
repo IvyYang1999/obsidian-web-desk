@@ -12,6 +12,16 @@ import { planAutoPositions, readCard, writeDeskFields } from "./layout";
 import { applyRecentLayoutWrite, RecentLayoutWrite } from "./layout-state";
 import { ConfirmModal, TextInputModal } from "./modals";
 import { normalizeRatingValue, ratingLinkState } from "./rating-state";
+import { beginCanvasPointerSession } from "./canvas-pointer";
+import {
+  arrowLine,
+  arrowsWithoutEndpoint,
+  cycleColor,
+  createGroupBox,
+  groupAtPoint,
+  hasArrowBetween,
+  pruneDanglingArrows as pruneSceneArrows,
+} from "./canvas-state";
 import {
   BookmarkCard,
   CanvasImage,
@@ -1018,12 +1028,7 @@ export class WebDeskView extends ItemView {
   // ---------- 分组 ----------
 
   private groupAt(cx: number, cy: number): string {
-    for (const group of this.host.getGroups()) {
-      if (cx >= group.x && cx <= group.x + group.w && cy >= group.y && cy <= group.y + group.h) {
-        return group.name;
-      }
-    }
-    return "";
+    return groupAtPoint(this.host.getGroups(), { x: cx, y: cy });
   }
 
   private createGroupAt(point: Point): void {
@@ -1033,15 +1038,12 @@ export class WebDeskView extends ItemView {
       onSubmit: (name) => {
         const groups = this.host.getGroups();
         const color = GROUP_COLORS[groups.length % GROUP_COLORS.length];
-        groups.push({
+        groups.push(createGroupBox({
           id: `g${Date.now().toString(36)}`,
           name,
-          x: Math.round(point.x),
-          y: Math.round(point.y),
-          w: 480,
-          h: 360,
+          point,
           color,
-        });
+        }));
         this.host.setGroups(groups);
         this.render();
       },
@@ -1064,38 +1066,26 @@ export class WebDeskView extends ItemView {
     }
 
     this.interactionLock += 1;
-    const startClient = { x: event.clientX, y: event.clientY };
     const origin = { x: group.x, y: group.y };
-    let moved = false;
-
-    try { el.setPointerCapture(event.pointerId); } catch {}
-
-    const onMove = (moveEvent: PointerEvent): void => {
-      const dx = (moveEvent.clientX - startClient.x) / this.transform.zoom;
-      const dy = (moveEvent.clientY - startClient.y) / this.transform.zoom;
-      if (!moved && Math.hypot(dx, dy) * this.transform.zoom < 4) {
-        return;
-      }
-      moved = true;
-      group.x = Math.round(origin.x + dx);
-      group.y = Math.round(origin.y + dy);
-      el.style.left = `${group.x}px`;
-      el.style.top = `${group.y}px`;
-    };
-
-    const onUp = (): void => {
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
-      this.interactionLock -= 1;
-      if (moved) {
-        this.host.setGroups(this.host.getGroups());
+    beginCanvasPointerSession({
+      event,
+      element: el,
+      zoom: () => this.transform.zoom,
+      onMove: (delta) => {
+        group.x = Math.round(origin.x + delta.x);
+        group.y = Math.round(origin.y + delta.y);
+        el.style.left = `${group.x}px`;
+        el.style.top = `${group.y}px`;
         this.renderArrows();
-        void this.recomputeGroupMembership();
-      }
-    };
-
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
+      },
+      onEnd: (moved) => {
+        this.interactionLock -= 1;
+        if (moved) {
+          this.host.setGroups(this.host.getGroups());
+          void this.recomputeGroupMembership();
+        }
+      },
+    });
   }
 
   private onGroupResizePointerDown(event: PointerEvent, group: GroupBox): void {
@@ -1110,42 +1100,27 @@ export class WebDeskView extends ItemView {
     }
 
     this.interactionLock += 1;
-    el.addClass("is-resizing");
-    const startClient = { x: event.clientX, y: event.clientY };
     const origin = { w: group.w, h: group.h };
-    let moved = false;
-
-    try { el.setPointerCapture(event.pointerId); } catch {}
-
-    const onMove = (moveEvent: PointerEvent): void => {
-      const dx = (moveEvent.clientX - startClient.x) / this.transform.zoom;
-      const dy = (moveEvent.clientY - startClient.y) / this.transform.zoom;
-      if (!moved && Math.hypot(dx, dy) * this.transform.zoom < 4) {
-        return;
-      }
-      moved = true;
-      group.w = Math.max(240, Math.round(origin.w + dx));
-      group.h = Math.max(180, Math.round(origin.h + dy));
-      el.style.width = `${group.w}px`;
-      el.style.height = `${group.h}px`;
-    };
-
-    const onUp = (): void => {
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
-      el.removeEventListener("pointercancel", onUp);
-      el.removeClass("is-resizing");
-      this.interactionLock -= 1;
-      if (moved) {
-        this.host.setGroups(this.host.getGroups());
+    beginCanvasPointerSession({
+      event,
+      element: el,
+      zoom: () => this.transform.zoom,
+      resizing: true,
+      onMove: (delta) => {
+        group.w = Math.max(240, Math.round(origin.w + delta.x));
+        group.h = Math.max(180, Math.round(origin.h + delta.y));
+        el.style.width = `${group.w}px`;
+        el.style.height = `${group.h}px`;
         this.renderArrows();
-        void this.recomputeGroupMembership();
-      }
-    };
-
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
-    el.addEventListener("pointercancel", onUp);
+      },
+      onEnd: (moved) => {
+        this.interactionLock -= 1;
+        if (moved) {
+          this.host.setGroups(this.host.getGroups());
+          void this.recomputeGroupMembership();
+        }
+      },
+    });
   }
 
   private onGroupContextMenu(event: MouseEvent, group: GroupBox): void {
@@ -1170,9 +1145,7 @@ export class WebDeskView extends ItemView {
         .setTitle("换颜色")
         .setIcon("palette")
         .onClick(() => {
-          const colors = GROUP_COLORS;
-          const index = colors.indexOf(group.color);
-          group.color = colors[(index + 1) % colors.length];
+          group.color = cycleColor(GROUP_COLORS, group.color);
           this.host.setGroups(this.host.getGroups());
           this.render();
         }),
@@ -1185,6 +1158,9 @@ export class WebDeskView extends ItemView {
         .onClick(() => {
           const groups = this.host.getGroups().filter((entry) => entry.id !== group.id);
           this.host.setGroups(groups);
+          this.host.setArrows(
+            arrowsWithoutEndpoint(this.host.getArrows(), { kind: "group", ref: group.id }),
+          );
           void this.clearGroupMembership(group.name);
           this.render();
         }),
@@ -1308,34 +1284,19 @@ export class WebDeskView extends ItemView {
     this.arrowsG = g;
   }
 
-  private endpointRect(ep: ArrowEndpoint): Rect | null {
-    if (ep.kind === "card") {
-      const card = this.cards.find((entry) => entry.path === ep.ref);
-      return card ? { x: card.x, y: card.y, w: card.size + 24, h: card.size + 44 } : null;
-    }
-    if (ep.kind === "textbox") {
-      const box = this.host.getTextBoxes().find((entry) => entry.id === ep.ref);
-      return box ? { x: box.x, y: box.y, w: box.w, h: box.h } : null;
-    }
-    if (ep.kind === "group") {
-      const group = this.host.getGroups().find((entry) => entry.id === ep.ref);
-      return group ? { x: group.x, y: group.y, w: group.w, h: group.h } : null;
-    }
-    return null;
-  }
-
-  private endpointPoint(ep: ArrowEndpoint): Point | null {
-    const rect = this.endpointRect(ep);
-    if (rect) {
-      return { x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 };
-    }
-    if (ep.kind === "point") {
-      const [x, y] = ep.ref.split(",").map(Number);
-      if (Number.isFinite(x) && Number.isFinite(y)) {
-        return { x, y };
-      }
-    }
-    return null;
+  private endpointScene() {
+    return {
+      cards: this.cards.map((card) => ({
+        ref: card.path,
+        x: card.x,
+        y: card.y,
+        w: card.size + 24,
+        h: card.size + 44,
+        group: card.group,
+      })),
+      textboxes: this.host.getTextBoxes(),
+      groups: this.host.getGroups(),
+    };
   }
 
   private renderArrows(): void {
@@ -1345,16 +1306,12 @@ export class WebDeskView extends ItemView {
     this.arrowsG.innerHTML = "";
     this.arrowEls.clear();
 
+    const scene = this.endpointScene();
     for (const arrow of this.host.getArrows()) {
-      const p1 = this.endpointPoint(arrow.from);
-      const p2 = this.endpointPoint(arrow.to);
-      if (!p1 || !p2) {
-        continue;
-      }
-      const r1 = this.endpointRect(arrow.from);
-      const r2 = this.endpointRect(arrow.to);
-      const a = r1 ? rectEdgePoint(r1, p2) : p1;
-      const b = r2 ? rectEdgePoint(r2, p1) : p2;
+      const line = arrowLine(arrow.from, arrow.to, scene);
+      if (!line) continue;
+      const a = line.from;
+      const b = line.to;
       const d = `M ${a.x} ${a.y} L ${b.x} ${b.y}`;
 
       // 透明加粗命中层（负责事件），可见细线层（负责显示）
@@ -1437,8 +1394,7 @@ export class WebDeskView extends ItemView {
           const arrows = this.host.getArrows();
           const target = arrows.find((entry) => entry.id === arrow.id);
           if (target) {
-            const index = GROUP_COLORS.indexOf(target.color);
-            target.color = GROUP_COLORS[(index + 1) % GROUP_COLORS.length];
+            target.color = cycleColor(GROUP_COLORS, target.color);
             this.host.setArrows(arrows);
           }
           this.renderArrows();
@@ -1754,37 +1710,23 @@ export class WebDeskView extends ItemView {
     this.rootEl.focus();
 
     this.interactionLock += 1;
-    const startClient = { x: event.clientX, y: event.clientY };
     const origin = { x: box.x, y: box.y };
-    let moved = false;
-
-    try { el.setPointerCapture(event.pointerId); } catch {}
-
-    const onMove = (moveEvent: PointerEvent): void => {
-      const dx = (moveEvent.clientX - startClient.x) / this.transform.zoom;
-      const dy = (moveEvent.clientY - startClient.y) / this.transform.zoom;
-      if (!moved && Math.hypot(dx, dy) * this.transform.zoom < 4) {
-        return;
-      }
-      moved = true;
-      box.x = Math.round(origin.x + dx);
-      box.y = Math.round(origin.y + dy);
-      el.style.left = `${box.x}px`;
-      el.style.top = `${box.y}px`;
-    };
-
-    const onUp = (): void => {
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
-      this.interactionLock -= 1;
-      if (moved) {
-        this.host.setTextBoxes(this.host.getTextBoxes());
+    beginCanvasPointerSession({
+      event,
+      element: el,
+      zoom: () => this.transform.zoom,
+      onMove: (delta) => {
+        box.x = Math.round(origin.x + delta.x);
+        box.y = Math.round(origin.y + delta.y);
+        el.style.left = `${box.x}px`;
+        el.style.top = `${box.y}px`;
         this.renderArrows();
-      }
-    };
-
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
+      },
+      onEnd: (moved) => {
+        this.interactionLock -= 1;
+        if (moved) this.host.setTextBoxes(this.host.getTextBoxes());
+      },
+    });
   }
 
   private onTextBoxResizePointerDown(event: PointerEvent, box: TextBox, el: HTMLElement): void {
@@ -1794,41 +1736,24 @@ export class WebDeskView extends ItemView {
     event.stopPropagation();
 
     this.interactionLock += 1;
-    el.addClass("is-resizing");
-    const startClient = { x: event.clientX, y: event.clientY };
     const origin = { w: box.w, h: box.h };
-    let moved = false;
-
-    try { el.setPointerCapture(event.pointerId); } catch {}
-
-    const onMove = (moveEvent: PointerEvent): void => {
-      const dx = (moveEvent.clientX - startClient.x) / this.transform.zoom;
-      const dy = (moveEvent.clientY - startClient.y) / this.transform.zoom;
-      if (!moved && Math.hypot(dx, dy) * this.transform.zoom < 4) {
-        return;
-      }
-      moved = true;
-      box.w = Math.max(140, Math.round(origin.w + dx));
-      box.h = Math.max(60, Math.round(origin.h + dy));
-      el.style.width = `${box.w}px`;
-      el.style.height = `${box.h}px`;
-    };
-
-    const onUp = (): void => {
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
-      el.removeEventListener("pointercancel", onUp);
-      el.removeClass("is-resizing");
-      this.interactionLock -= 1;
-      if (moved) {
-        this.host.setTextBoxes(this.host.getTextBoxes());
+    beginCanvasPointerSession({
+      event,
+      element: el,
+      zoom: () => this.transform.zoom,
+      resizing: true,
+      onMove: (delta) => {
+        box.w = Math.max(140, Math.round(origin.w + delta.x));
+        box.h = Math.max(60, Math.round(origin.h + delta.y));
+        el.style.width = `${box.w}px`;
+        el.style.height = `${box.h}px`;
         this.renderArrows();
-      }
-    };
-
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
-    el.addEventListener("pointercancel", onUp);
+      },
+      onEnd: (moved) => {
+        this.interactionLock -= 1;
+        if (moved) this.host.setTextBoxes(this.host.getTextBoxes());
+      },
+    });
   }
 
   private editTextBox(box: TextBox, textEl: HTMLElement): void {
@@ -1885,8 +1810,7 @@ export class WebDeskView extends ItemView {
           const boxes = this.host.getTextBoxes();
           const target = boxes.find((entry) => entry.id === box.id);
           if (target) {
-            const index = GROUP_COLORS.indexOf(target.color);
-            target.color = GROUP_COLORS[(index + 1) % GROUP_COLORS.length];
+            target.color = cycleColor(GROUP_COLORS, target.color);
             this.host.setTextBoxes(boxes);
           }
           this.render();
@@ -1983,16 +1907,7 @@ export class WebDeskView extends ItemView {
 
   private pruneDanglingArrows(): void {
     const arrows = this.host.getArrows();
-    const paths = new Set(this.cards.map((card) => card.path));
-    const tbIds = new Set(this.host.getTextBoxes().map((box) => box.id));
-    const groupIds = new Set(this.host.getGroups().map((group) => group.id));
-    const alive = (ep: ArrowEndpoint): boolean => {
-      if (ep.kind === "card") return paths.has(ep.ref);
-      if (ep.kind === "textbox") return tbIds.has(ep.ref);
-      if (ep.kind === "group") return groupIds.has(ep.ref);
-      return true;
-    };
-    const kept = arrows.filter((arrow) => alive(arrow.from) && alive(arrow.to));
+    const kept = pruneSceneArrows(arrows, this.endpointScene());
     if (kept.length !== arrows.length) {
       this.host.setArrows(kept);
     }
@@ -2018,20 +1933,16 @@ export class WebDeskView extends ItemView {
 
   removeTextBox(id: string): void {
     this.host.setTextBoxes(this.host.getTextBoxes().filter((box) => box.id !== id));
-    this.host.setArrows(
-      this.host.getArrows().filter((arrow) => arrow.from.ref !== id && arrow.to.ref !== id),
-    );
+    this.host.setArrows(arrowsWithoutEndpoint(
+      this.host.getArrows(),
+      { kind: "textbox", ref: id },
+    ));
     this.render();
   }
 
   addArrow(from: ArrowEndpoint, to: ArrowEndpoint, label = ""): Arrow {
     const arrows = this.host.getArrows();
-    const dup = arrows.some(
-      (arrow) =>
-        (arrow.from.ref === from.ref && arrow.to.ref === to.ref) ||
-        (arrow.from.ref === to.ref && arrow.to.ref === from.ref),
-    );
-    if (dup) {
+    if (hasArrowBetween(arrows, from, to)) {
       new Notice("这两个之间已经有箭头了");
       return { id: "", from, to, label, color: "" };
     }
@@ -2229,21 +2140,6 @@ function normalizeRect(a: Point, b: Point): Rect {
     w: Math.abs(b.x - a.x),
     h: Math.abs(b.y - a.y),
   };
-}
-
-/** 线段从 rect 中心指向 towards，求与矩形边框的交点（箭头端点裁剪）。 */
-function rectEdgePoint(rect: Rect, towards: Point): Point {
-  const cx = rect.x + rect.w / 2;
-  const cy = rect.y + rect.h / 2;
-  const dx = towards.x - cx;
-  const dy = towards.y - cy;
-  if (dx === 0 && dy === 0) {
-    return { x: cx, y: cy };
-  }
-  const sx = dx === 0 ? Infinity : rect.w / 2 / Math.abs(dx);
-  const sy = dy === 0 ? Infinity : rect.h / 2 / Math.abs(dy);
-  const scale = Math.min(sx, sy);
-  return { x: cx + dx * scale, y: cy + dy * scale };
 }
 
 function rectsIntersect(a: Rect, b: Rect): boolean {

@@ -22,6 +22,7 @@ function loadTypeScript(entryPoint) {
 const imageState = loadTypeScript("src/image-state.ts");
 const embedState = loadTypeScript("src/embed-state.ts");
 const clipboardState = loadTypeScript("src/clipboard-state.ts");
+const canvasState = loadTypeScript("src/canvas-state.ts");
 
 test("横图插入画布时按默认边界等比例缩小", () => {
   assert.deepEqual(imageState.fitImageWithin(1200, 800), { w: 360, h: 240 });
@@ -65,6 +66,10 @@ test("旧版内嵌画布数据在没有 images 字段时仍可读取", () => {
   assert.deepEqual(embedState.parseEmbedData('{"items":[]}'), {
     items: [],
     images: [],
+    textboxes: [],
+    groups: [],
+    arrows: [],
+    ratings: [],
   });
 });
 
@@ -73,7 +78,81 @@ test("正文插入项生成可解析的空 web-desk 代码块", () => {
   assert.match(block, /^```web-desk\n/);
   assert.match(block, /\n```$/);
   const json = block.slice("```web-desk\n".length, -"\n```".length);
-  assert.deepEqual(JSON.parse(json), { items: [], images: [], textboxes: [], ratings: [] });
+  assert.deepEqual(JSON.parse(json), {
+    items: [],
+    images: [],
+    textboxes: [],
+    groups: [],
+    arrows: [],
+    ratings: [],
+  });
+});
+
+test("旧文内文本框补默认颜色且新版分组箭头可往返", () => {
+  const data = embedState.parseEmbedData(JSON.stringify({
+    items: [],
+    textboxes: [{ id: "t1", text: "旧备注", x: 1, y: 2, w: 100, h: 60 }],
+    groups: [{ id: "g1", name: "资料", x: 0, y: 0, w: 300, h: 200, color: "#7aa2f7" }],
+    arrows: [{ id: "a1", from: { kind: "group", ref: "g1" }, to: { kind: "point", ref: "400,100" }, label: "去这里", color: "" }],
+  }));
+  assert.equal(data.textboxes[0].color, "#7aa2f7");
+  assert.equal(data.groups[0].name, "资料");
+  assert.equal(data.arrows[0].label, "去这里");
+});
+
+test("共享画布协议把箭头端点裁到组件边缘", () => {
+  const scene = {
+    cards: [{ ref: "one", x: 0, y: 0, w: 100, h: 100 }],
+    textboxes: [{ id: "note", text: "", x: 200, y: 0, w: 100, h: 100, color: "#fff" }],
+    groups: [],
+  };
+  assert.deepEqual(
+    canvasState.arrowLine(
+      { kind: "card", ref: "one" },
+      { kind: "textbox", ref: "note" },
+      scene,
+    ),
+    { from: { x: 100, y: 50 }, to: { x: 200, y: 50 } },
+  );
+});
+
+test("共享画布协议会清理指向已删除组件的悬空箭头", () => {
+  const arrows = [
+    { id: "keep", from: { kind: "card", ref: "one" }, to: { kind: "point", ref: "20,30" }, label: "", color: "" },
+    { id: "drop", from: { kind: "card", ref: "gone" }, to: { kind: "point", ref: "20,30" }, label: "", color: "" },
+  ];
+  assert.deepEqual(
+    canvasState.pruneDanglingArrows(arrows, {
+      cards: [{ ref: "one", x: 0, y: 0, w: 100, h: 100 }],
+      textboxes: [],
+      groups: [],
+    }).map((arrow) => arrow.id),
+    ["keep"],
+  );
+});
+
+test("共享分组规则按图标中心更新归属并支持重命名", () => {
+  const items = [{ ref: "one", x: 20, y: 20, w: 100, h: 120, group: "" }];
+  const groups = [{ id: "g1", name: "阅读", x: 0, y: 0, w: 200, h: 200, color: "#fff" }];
+  assert.equal(canvasState.recomputeGroupMembership(items, groups), 1);
+  assert.equal(items[0].group, "阅读");
+  assert.equal(canvasState.renameGroupMembership(items, "阅读", "资料"), 1);
+  assert.equal(items[0].group, "资料");
+});
+
+test("文内分组可用共享工厂围绕点击点创建紧凑尺寸", () => {
+  assert.deepEqual(
+    canvasState.createGroupBox({
+      id: "g1",
+      name: "资料",
+      point: { x: 300, y: 220 },
+      color: "#7aa2f7",
+      width: 360,
+      height: 240,
+      centered: true,
+    }),
+    { id: "g1", name: "资料", x: 120, y: 100, w: 360, h: 240, color: "#7aa2f7" },
+  );
 });
 
 test("内嵌画布新链接避开已有卡片、图片和文本框", () => {

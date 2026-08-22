@@ -139,7 +139,9 @@
   position: absolute;
   border: 2px dashed;
   border-radius: var(--wd-radius-lg);
-  z-index: 5;
+  /* 背景留在网页元素下方；标题和手柄单独进入上层，避免被图标遮住后无法操作。 */
+  z-index: auto;
+  pointer-events: none;
 }
 
 .web-desk-group-header {
@@ -151,6 +153,8 @@
   background-color: var(--background-primary);
   border-radius: var(--wd-radius-sm);
   padding: 0 6px;
+  pointer-events: auto;
+  z-index: 12;
 }
 
 .web-desk-group-header:active {
@@ -171,6 +175,11 @@
   border-color: inherit;
   border-bottom-right-radius: var(--wd-radius-sm);
   cursor: nwse-resize;
+}
+
+.web-desk-group-resize {
+  pointer-events: auto;
+  z-index: 12;
 }
 
 .web-desk-icon-resize {
@@ -272,6 +281,17 @@
 }
 
 /* 笔记内嵌画布 */
+.web-desk-embed-host,
+.markdown-rendered pre:has(> .web-desk-embed-host),
+.markdown-source-view .cm-embed-block:has(.web-desk-embed-host) {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 .web-desk-embed {
   position: relative;
   overflow: hidden;
