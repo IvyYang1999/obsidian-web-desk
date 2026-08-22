@@ -67,7 +67,7 @@ const MIN_ZOOM = 0.3;
 const MAX_ZOOM = 2;
 const SVG_NS = "http://www.w3.org/2000/svg";
 const ARROW_SPAN = 20000;
-let pendingEmbedFocus: { key: string; expiresAt: number } | null = null;
+let pendingEmbedFocus: { key: string; expiresAt: number; viaPointer: boolean } | null = null;
 
 interface EmbedViewObject extends GroupObjectRect {
   kind: "card" | "image" | "textbox" | "rating";
@@ -184,6 +184,7 @@ export class DeskEmbed {
       pendingEmbedFocus = null;
       queueMicrotask(() => {
         if (Date.now() <= pending.expiresAt && this.rootEl.isConnected) {
+          this.rootEl.toggleClass("is-pointer-focused", pending.viaPointer);
           this.rootEl.focus({ preventScroll: true });
         }
       });
@@ -1042,6 +1043,7 @@ export class DeskEmbed {
     // 卡片、图片等子元素不会自动把焦点交给可聚焦的画布祖先。
     // 明确认领焦点，确保下一次粘贴仍进入这个画布；文本框编辑态除外。
     this.rootEl.addEventListener("pointerdown", (event) => {
+      this.rootEl.addClass("is-pointer-focused");
       if (!isEditablePasteTarget(event.target, this.rootEl)) {
         this.rootEl.focus({ preventScroll: true });
       }
@@ -1056,6 +1058,7 @@ export class DeskEmbed {
     }, { passive: false });
 
     this.rootEl.addEventListener("keydown", (event) => {
+      this.rootEl.removeClass("is-pointer-focused");
       if (event.code === "Space" && !this.editing) {
         this.spacePanning = true;
         event.preventDefault();
@@ -1096,6 +1099,7 @@ export class DeskEmbed {
     });
     this.rootEl.addEventListener("blur", () => {
       this.spacePanning = false;
+      this.rootEl.removeClass("is-pointer-focused");
     });
 
     // 空白拖动 = 平移（不抢点击）
@@ -1789,7 +1793,11 @@ export class DeskEmbed {
 
     const active = this.rootEl.ownerDocument.activeElement;
     pendingEmbedFocus = active === this.rootEl || this.rootEl.contains(active)
-      ? { key: this.embedKey, expiresAt: Date.now() + 2_000 }
+      ? {
+        key: this.embedKey,
+        expiresAt: Date.now() + 2_000,
+        viaPointer: this.rootEl.classList.contains("is-pointer-focused"),
+      }
       : null;
 
     const info = this.ctx.getSectionInfo(this.el);

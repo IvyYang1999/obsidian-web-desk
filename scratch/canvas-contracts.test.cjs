@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const test = require("node:test");
 const { buildSync } = require("esbuild");
 
@@ -26,6 +27,12 @@ const canvasState = loadTypeScript("src/canvas-state.ts");
 const embedWriteState = loadTypeScript("src/embed-write-state.ts");
 const objectGroupState = loadTypeScript("src/object-group-state.ts");
 const canvasPointer = loadTypeScript("src/canvas-pointer.ts");
+
+test("分类分组框缩放时只保留自身虚线边缘", () => {
+  const css = fs.readFileSync("styles.css", "utf8");
+  assert.match(css, /\.web-desk-group\.is-resizing::after\s*\{\s*content:\s*none;/);
+  assert.match(css, /\.web-desk-embed:focus-visible:not\(\.is-pointer-focused\)::after/);
+});
 
 function pointerEvent(type, { x, y, pointerId = 1 }) {
   const event = new Event(type);

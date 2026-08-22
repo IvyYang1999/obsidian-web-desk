@@ -62,7 +62,6 @@
 }
 
 .web-desk-icon.is-resizing::after,
-.web-desk-group.is-resizing::after,
 .web-desk-textbox.is-resizing::after,
 .web-desk-image.is-resizing::after {
   content: "";
@@ -73,6 +72,11 @@
   border-radius: inherit;
   pointer-events: none;
   z-index: 4;
+}
+
+/* 分组框自身已有常驻虚线边缘；缩放时不再叠加第二个内嵌虚线环。 */
+.web-desk-group.is-resizing::after {
+  content: none;
 }
 
 .web-desk-icon:active {
@@ -396,7 +400,7 @@
 }
 
 /* 默认焦点 outline 绘制在元素外侧，容易被 Obsidian 的代码块容器裁掉。 */
-.web-desk-embed:focus-visible::after {
+.web-desk-embed:focus-visible:not(.is-pointer-focused)::after {
   content: "";
   position: absolute;
   inset: 2px;
