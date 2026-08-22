@@ -1,5 +1,5 @@
 import { App, normalizePath, TFile } from "obsidian";
-import { extractMarkdownLinkCandidates } from "./file-link-state";
+import { extractMarkdownLinkCandidates, vaultPathFromMarkdownCandidate } from "./file-link-state";
 import { quoteYaml, safeName } from "./util";
 import type { WebDeskSettings } from "./types";
 
@@ -14,24 +14,12 @@ export function markdownFilesFromDrop(
   sourcePath: string,
 ): TFile[] {
   if (!data) return [];
-  const electron = (window as typeof window & {
-    electron?: { webUtils?: { getPathForFile?: (file: File) => string } };
-  }).electron;
-  const filePaths = Array.from(data.files ?? [])
-    .map((file) =>
-      (file as File & { path?: string }).path || electron?.webUtils?.getPathForFile?.(file) || "",
-    )
-    .filter(Boolean);
-  const candidates = extractMarkdownLinkCandidates({
-    html: data.getData("text/html"),
-    text: data.getData("text/plain") || data.getData("text"),
-    uriList: data.getData("text/uri-list"),
-    filePaths,
-  });
+  const candidates = candidatesFromDrop(data);
   const basePath = readVaultBasePath(app);
   const resolved: TFile[] = [];
   for (const candidate of candidates) {
-    const vaultPath = toVaultPath(candidate, basePath);
+    const vaultPath = vaultPathFromMarkdownCandidate(candidate, basePath);
+    if (!vaultPath) continue;
     const exact = app.vault.getAbstractFileByPath(normalizePath(vaultPath));
     const file = exact instanceof TFile
       ? exact
@@ -40,6 +28,14 @@ export function markdownFilesFromDrop(
     if (!resolved.some((entry) => entry.path === file.path)) resolved.push(file);
   }
   return resolved;
+}
+
+/** Finder 拖入了本地 Markdown，但它不能解析为当前 Vault 文件时供 UI 给出明确提示。 */
+export function hasLocalMarkdownFileDrop(data: DataTransfer | null): boolean {
+  if (!data) return false;
+  return candidatesFromDrop(data).some((candidate) =>
+    (/^(?:\/|[a-z]:[\\/])/i.test(candidate) && /\.md$/i.test(candidate))
+  );
 }
 
 export async function createMarkdownShortcut(
@@ -82,12 +78,21 @@ function readVaultBasePath(app: App): string {
   return typeof adapter.basePath === "string" ? adapter.basePath.replace(/\/$/, "") : "";
 }
 
-function toVaultPath(candidate: string, basePath: string): string {
-  let path = candidate.trim().replace(/^file:\/\//i, "");
-  if (basePath && (path === basePath || path.startsWith(`${basePath}/`))) {
-    path = path.slice(basePath.length).replace(/^\/+/, "");
-  }
-  return path.replace(/^\/+/, "").split("#", 1)[0];
+function candidatesFromDrop(data: DataTransfer): string[] {
+  const electron = (window as typeof window & {
+    electron?: { webUtils?: { getPathForFile?: (file: File) => string } };
+  }).electron;
+  const filePaths = Array.from(data.files ?? [])
+    .map((file) =>
+      (file as File & { path?: string }).path || electron?.webUtils?.getPathForFile?.(file) || "",
+    )
+    .filter(Boolean);
+  return extractMarkdownLinkCandidates({
+    html: data.getData("text/html"),
+    text: data.getData("text/plain") || data.getData("text"),
+    uriList: data.getData("text/uri-list"),
+    filePaths,
+  });
 }
 
 async function ensureFolder(app: App, folder: string): Promise<void> {

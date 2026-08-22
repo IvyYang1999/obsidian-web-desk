@@ -28,6 +28,7 @@ const embedWriteState = loadTypeScript("src/embed-write-state.ts");
 const objectGroupState = loadTypeScript("src/object-group-state.ts");
 const canvasPointer = loadTypeScript("src/canvas-pointer.ts");
 const fileLinkState = loadTypeScript("src/file-link-state.ts");
+const utilState = loadTypeScript("src/util.ts");
 
 test("Obsidian 内部拖拽优先解析 app 路径，并兼容 URL 与 WikiLink", () => {
   assert.deepEqual(
@@ -41,6 +42,36 @@ test("Obsidian 内部拖拽优先解析 app 路径，并兼容 URL 与 WikiLink"
     fileLinkState.extractMarkdownLinkCandidates({ text: "[[项目/设计|设计稿]]\n其它/记录.md" }),
     ["项目/设计", "其它/记录.md"],
   );
+});
+
+test("Finder 的 file URI 保留绝对路径并只接受当前 Vault 内 Markdown", () => {
+  const vault = "/Users/test/Vaults/main";
+  const uri = "file:///Users/test/Vaults/main/%E9%A1%B9%E7%9B%AE/%E8%AE%BE%E8%AE%A1.md";
+  assert.deepEqual(fileLinkState.extractMarkdownLinkCandidates({ uriList: uri }), [
+    "/Users/test/Vaults/main/项目/设计.md",
+  ]);
+  assert.equal(
+    fileLinkState.vaultPathFromMarkdownCandidate("/Users/test/Vaults/main/项目/设计.md", vault),
+    "项目/设计.md",
+  );
+  assert.equal(
+    fileLinkState.vaultPathFromMarkdownCandidate("/Users/test/Desktop/设计.md", vault),
+    null,
+  );
+  const encodedHash = "file:///Users/test/Vaults/main/%E9%A1%B9%E7%9B%AE/%E8%AE%BE%E8%AE%A1%23%E5%A4%8D%E7%9B%98.md";
+  const [hashPath] = fileLinkState.extractMarkdownLinkCandidates({ uriList: encodedHash });
+  assert.equal(hashPath, "/Users/test/Vaults/main/项目/设计#复盘.md");
+  assert.equal(
+    fileLinkState.vaultPathFromMarkdownCandidate(hashPath, vault),
+    "项目/设计#复盘.md",
+  );
+});
+
+test("本地文件 URI 永不进入网页 URL 路由", () => {
+  assert.equal(utilState.isProbablyUrl("file:///Users/test/Vaults/main/项目/设计.md"), false);
+  assert.equal(utilState.isProbablyUrl("obsidian://open?vault=main&file=项目/设计.md"), false);
+  assert.equal(utilState.isProbablyUrl("component.gallery"), true);
+  assert.equal(utilState.isProbablyUrl("https://example.com"), true);
 });
 
 test("文内画布能从所有 web-desk 块汇总真实 Markdown 双链", () => {

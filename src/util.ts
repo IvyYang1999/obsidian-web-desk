@@ -42,6 +42,9 @@ export function isProbablyUrl(text: string): boolean {
   if (!trimmed || /\s/.test(trimmed)) {
     return false;
   }
+  if (/^[a-z][a-z\d+.-]*:/i.test(trimmed) && !/^https?:\/\//i.test(trimmed)) {
+    return false;
+  }
   try {
     const parsed = new URL(/^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`);
     return parsed.protocol === "http:" || parsed.protocol === "https:";

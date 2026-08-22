@@ -8,7 +8,11 @@ import {
 } from "./image-storage";
 import { isEditablePasteTarget, splitCanvasPaste } from "./clipboard-state";
 import { resizeImageToWidth } from "./image-state";
-import { createMarkdownShortcut, markdownFilesFromDrop } from "./file-link-storage";
+import {
+  createMarkdownShortcut,
+  hasLocalMarkdownFileDrop,
+  markdownFilesFromDrop,
+} from "./file-link-storage";
 import { planAutoPositions, readCard, writeDeskFields } from "./layout";
 import { applyRecentLayoutWrite, RecentLayoutWrite } from "./layout-state";
 import { ConfirmModal, TextInputModal } from "./modals";
@@ -2277,6 +2281,10 @@ export class WebDeskView extends ItemView {
     const markdownFiles = markdownFilesFromDrop(this.app, event.dataTransfer, "");
     if (markdownFiles.length > 0) {
       await this.importMarkdownFiles(markdownFiles, point);
+      return;
+    }
+    if (hasLocalMarkdownFileDrop(event.dataTransfer)) {
+      new Notice("这个 Markdown 不在当前 Vault 中；请先移入 Vault 再拖到画布");
       return;
     }
     const text =

@@ -35,12 +35,40 @@ export function extractMarkdownLinkCandidates(payload: MarkdownDropText): string
     push(match[1]);
   }
   for (const line of combined.split(/\r?\n/)) {
-    const raw = line.trim().replace(/^file:\/\//i, "");
+    const raw = line.trim();
+    if (/^file:\/\//i.test(raw)) {
+      if (/\.md(?:[?#].*)?$/i.test(raw) && !/[<>\[\]()]/.test(raw)) push(raw);
+      continue;
+    }
     if (/^[a-z][a-z\d+.-]*:\/\//i.test(raw)) continue;
     if (/\.md$/i.test(raw) && !/[<>\[\]()]/.test(raw)) push(raw);
   }
   for (const filePath of payload.filePaths ?? []) push(filePath);
   return candidates;
+}
+
+/** 将候选路径限制在当前 Vault；绝对路径若越界则拒绝，不能误当成 Vault 相对路径。 */
+export function vaultPathFromMarkdownCandidate(candidate: string, basePath: string): string | null {
+  let path = candidate.trim().replace(/\\/g, "/");
+  if (!path) return null;
+
+  const base = basePath.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  const isWindowsAbsolute = /^[a-z]:\//i.test(path);
+  const isAbsolute = path.startsWith("/") || isWindowsAbsolute;
+  if (isAbsolute) {
+    if (!base) return null;
+    const caseInsensitive = isWindowsAbsolute || /^[a-z]:\//i.test(base);
+    const comparablePath = caseInsensitive ? path.toLowerCase() : path;
+    const comparableBase = caseInsensitive ? base.toLowerCase() : base;
+    if (comparablePath !== comparableBase && !comparablePath.startsWith(`${comparableBase}/`)) {
+      return null;
+    }
+    path = path.slice(base.length).replace(/^\/+/, "");
+  } else {
+    path = path.replace(/^\/+/, "");
+  }
+
+  return path || null;
 }
 
 /** 汇总一篇笔记内所有 web-desk 块的文件引用，用于物化 frontmatter 双链。 */
@@ -62,11 +90,16 @@ export function extractEmbeddedMarkdownPaths(markdown: string): string[] {
 }
 
 function decodePath(value: string): string {
-  const stripped = value.trim().replace(/^\/+/, "");
-  if (!stripped) return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
   try {
-    return decodeURIComponent(stripped);
+    if (/^file:\/\//i.test(trimmed)) {
+      const url = new URL(trimmed);
+      const pathname = decodeURIComponent(url.pathname);
+      return /^\/[a-z]:\//i.test(pathname) ? pathname.slice(1) : pathname;
+    }
+    return decodeURIComponent(trimmed).replace(/^\/+/, "");
   } catch {
-    return stripped;
+    return trimmed;
   }
 }

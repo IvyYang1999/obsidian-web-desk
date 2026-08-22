@@ -12,7 +12,7 @@ import {
   parseEmbedData,
 } from "./embed-state";
 import { extractEmbeddedMarkdownPaths } from "./file-link-state";
-import { markdownFilesFromDrop } from "./file-link-storage";
+import { hasLocalMarkdownFileDrop, markdownFilesFromDrop } from "./file-link-storage";
 import {
   imageFilesFrom,
   imageFilesFromClipboard,
@@ -1702,6 +1702,10 @@ export class DeskEmbed {
     const markdownFiles = markdownFilesFromDrop(this.app, event.dataTransfer, this.filePath);
     if (markdownFiles.length > 0) {
       this.addMarkdownFiles(markdownFiles, point);
+      return;
+    }
+    if (hasLocalMarkdownFileDrop(event.dataTransfer)) {
+      new Notice("这个 Markdown 不在当前 Vault 中；请先移入 Vault 再拖到画布");
       return;
     }
     const text =
