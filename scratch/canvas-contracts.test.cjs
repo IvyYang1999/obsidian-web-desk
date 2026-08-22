@@ -73,7 +73,7 @@ test("正文插入项生成可解析的空 web-desk 代码块", () => {
   assert.match(block, /^```web-desk\n/);
   assert.match(block, /\n```$/);
   const json = block.slice("```web-desk\n".length, -"\n```".length);
-  assert.deepEqual(JSON.parse(json), { items: [], images: [], textboxes: [] });
+  assert.deepEqual(JSON.parse(json), { items: [], images: [], textboxes: [], ratings: [] });
 });
 
 test("内嵌画布新链接避开已有卡片、图片和文本框", () => {
@@ -86,7 +86,7 @@ test("内嵌画布新链接避开已有卡片、图片和文本框", () => {
 
   const placed = embedState.findAvailableEmbedItemPosition(data, desired);
   assert.notDeepEqual(placed, desired);
-  assert.deepEqual(placed, { x: -28, y: 100 });
+  assert.deepEqual(placed, { x: 228, y: 228 });
 });
 
 test("内嵌画布中心空闲时保留用户期望落点", () => {
@@ -96,6 +96,18 @@ test("内嵌画布中心空闲时保留用户期望落点", () => {
       { x: 100, y: 100 },
     ),
     { x: 100, y: 100 },
+  );
+});
+
+test("内嵌画布连续评分组件不会完全重叠", () => {
+  const data = {
+    items: [],
+    images: [],
+    ratings: [{ id: "r1", value: 4, x: 100, y: 100 }],
+  };
+  assert.deepEqual(
+    embedState.findAvailableEmbedRatingPosition(data, { x: 100, y: 100 }),
+    { x: 340, y: 100 },
   );
 });
 

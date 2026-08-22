@@ -9,6 +9,7 @@ import {
   CanvasTransform,
   DEFAULT_SETTINGS,
   GroupBox,
+  Rating,
   TextBox,
   VIEW_TYPE_WEB_DESK,
   WebDeskSettings,
@@ -22,6 +23,7 @@ interface WebDeskPluginData {
   textboxes?: TextBox[];
   arrows?: Arrow[];
   images?: CanvasImage[];
+  ratings?: Rating[];
   view?: CanvasTransform;
 }
 
@@ -31,6 +33,7 @@ export default class WebDeskPlugin extends Plugin {
   private textBoxes: TextBox[] = [];
   private arrows: Arrow[] = [];
   private images: CanvasImage[] = [];
+  private ratings: Rating[] = [];
   private viewTransform: CanvasTransform = { panX: 0, panY: 0, zoom: 1 };
   private saveDataTimer: number | null = null;
 
@@ -57,6 +60,11 @@ export default class WebDeskPlugin extends Plugin {
       getImages: () => this.images,
       setImages: (images) => {
         this.images = images;
+        this.saveDataDebounced();
+      },
+      getRatings: () => this.ratings,
+      setRatings: (ratings) => {
+        this.ratings = ratings;
         this.saveDataDebounced();
       },
       getTransform: () => this.viewTransform,
@@ -139,6 +147,7 @@ export default class WebDeskPlugin extends Plugin {
     this.textBoxes = Array.isArray(data?.textboxes) ? data!.textboxes! : [];
     this.arrows = Array.isArray(data?.arrows) ? data!.arrows! : [];
     this.images = Array.isArray(data?.images) ? data!.images! : [];
+    this.ratings = Array.isArray(data?.ratings) ? data!.ratings! : [];
     this.viewTransform = data?.view ?? { panX: 0, panY: 0, zoom: 1 };
   }
 
@@ -153,6 +162,7 @@ export default class WebDeskPlugin extends Plugin {
       textboxes: this.textBoxes,
       arrows: this.arrows,
       images: this.images,
+      ratings: this.ratings,
       view: this.viewTransform,
     };
   }

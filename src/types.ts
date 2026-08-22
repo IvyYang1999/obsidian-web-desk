@@ -32,6 +32,21 @@ export interface CanvasImage {
   h: number;
 }
 
+/** 评分可独立存在，也可保存一个网页引用；引用失效时保留评分本身。 */
+export interface RatingLink {
+  ref: string;
+  title: string;
+  url: string;
+}
+
+export interface Rating {
+  id: string;
+  value: number;
+  x: number;
+  y: number;
+  link?: RatingLink;
+}
+
 /** 箭头端点：card=md路径 / textbox·group=id / point="x,y"。 */
 export type ArrowEndpointKind = "card" | "textbox" | "group" | "point";
 

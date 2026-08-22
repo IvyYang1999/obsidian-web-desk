@@ -11,6 +11,7 @@ import { resizeImageToWidth } from "./image-state";
 import { planAutoPositions, readCard, writeDeskFields } from "./layout";
 import { applyRecentLayoutWrite, RecentLayoutWrite } from "./layout-state";
 import { ConfirmModal, TextInputModal } from "./modals";
+import { normalizeRatingValue, ratingLinkState } from "./rating-state";
 import {
   BookmarkCard,
   CanvasImage,
@@ -20,6 +21,7 @@ import {
   ArrowEndpoint,
   GROUP_COLORS,
   GroupBox,
+  Rating,
   TextBox,
   SIZE_LARGE,
   SIZE_MEDIUM,
@@ -39,6 +41,8 @@ export interface WebDeskHost {
   setArrows(arrows: Arrow[]): void;
   getImages(): CanvasImage[];
   setImages(images: CanvasImage[]): void;
+  getRatings(): Rating[];
+  setRatings(ratings: Rating[]): void;
   getTransform(): CanvasTransform;
   setTransform(transform: CanvasTransform): void;
 }
@@ -65,6 +69,7 @@ export class WebDeskView extends ItemView {
   private iconEls = new Map<string, HTMLElement>();
   private groupEls = new Map<string, HTMLElement>();
   private textBoxEls = new Map<string, HTMLElement>();
+  private ratingEls = new Map<string, HTMLElement>();
   private arrowsG: SVGGElement | null = null;
   private arrowMarkerIds = new Map<string, string>();
   private arrowEls = new Map<string, SVGPathElement>();
@@ -271,6 +276,7 @@ export class WebDeskView extends ItemView {
     this.iconEls.clear();
     this.groupEls.clear();
     this.textBoxEls.clear();
+    this.ratingEls.clear();
     this.canvasEl.empty();
 
     this.buildSvgLayer();
@@ -283,9 +289,12 @@ export class WebDeskView extends ItemView {
       this.renderIcon(card);
     }
     this.renderTextBoxes();
+    this.renderRatings();
 
     this.hintEl.style.display =
-      this.cards.length === 0 && this.host.getImages().length === 0 ? "flex" : "none";
+      this.cards.length === 0 && this.host.getImages().length === 0 && this.host.getRatings().length === 0
+        ? "flex"
+        : "none";
     this.syncSelection();
   }
 
@@ -314,6 +323,8 @@ export class WebDeskView extends ItemView {
 
     const label = el.createDiv({ cls: "web-desk-icon-label", text: card.title });
     label.style.width = `${card.size + 24}px`;
+    const handle = el.createDiv({ cls: "web-desk-icon-resize" });
+    handle.style.top = `${card.size - 4}px`;
 
     el.setAttribute("data-path", card.path);
     el.setAttribute("aria-label", card.url ? `${card.title}\n${card.url}` : card.title);
@@ -324,6 +335,7 @@ export class WebDeskView extends ItemView {
       this.openMarkdown(card);
     });
     el.addEventListener("contextmenu", (event) => this.onIconContextMenu(event, card));
+    handle.addEventListener("pointerdown", (event) => this.onIconResizePointerDown(event, card, el));
 
     this.iconEls.set(card.path, el);
   }
@@ -450,6 +462,10 @@ export class WebDeskView extends ItemView {
       expand(image.x, image.y);
       expand(image.x + image.w, image.y + image.h);
     }
+    for (const rating of this.host.getRatings()) {
+      expand(rating.x, rating.y);
+      expand(rating.x + 208, rating.y + 86);
+    }
 
     if (minX === Infinity) {
       this.transform = { panX: 0, panY: 0, zoom: 1 };
@@ -483,6 +499,7 @@ export class WebDeskView extends ItemView {
       target.closest(".web-desk-group") ||
       target.closest(".web-desk-image") ||
       target.closest(".web-desk-textbox") ||
+      target.closest(".web-desk-rating") ||
       target.closest(".web-desk-toolbar")
     ) {
       return;
@@ -581,7 +598,8 @@ export class WebDeskView extends ItemView {
     if (
       target.closest(".web-desk-icon") ||
       target.closest(".web-desk-group") ||
-      target.closest(".web-desk-image")
+      target.closest(".web-desk-image") ||
+      target.closest(".web-desk-rating")
     ) {
       return;
     }
@@ -606,6 +624,12 @@ export class WebDeskView extends ItemView {
         .setTitle("新建文本框")
         .setIcon("sticky-note")
         .onClick(() => this.addTextBox(point.x - 130, point.y - 60)),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("新建评分")
+        .setIcon("star")
+        .onClick(() => this.addRating(point)),
     );
     menu.addItem((item) =>
       item
@@ -635,7 +659,7 @@ export class WebDeskView extends ItemView {
   // ---------- 图标交互 ----------
 
   private onIconPointerDown(event: PointerEvent, card: BookmarkCard, el: HTMLElement): void {
-    if (event.button !== 0) {
+    if (event.button !== 0 || (event.target as HTMLElement).closest(".web-desk-icon-resize")) {
       return;
     }
     if (this.interceptArrowClick(event)) {
@@ -716,6 +740,46 @@ export class WebDeskView extends ItemView {
       });
     };
 
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
+  }
+
+  private onIconResizePointerDown(
+    event: PointerEvent,
+    card: BookmarkCard,
+    el: HTMLElement,
+  ): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.rootEl.focus();
+    this.interactionLock += 1;
+    const start = { x: event.clientX, y: event.clientY };
+    const origin = card.size;
+    let moved = false;
+    try { el.setPointerCapture(event.pointerId); } catch {}
+    const onMove = (moveEvent: PointerEvent): void => {
+      const dx = (moveEvent.clientX - start.x) / this.transform.zoom;
+      const dy = (moveEvent.clientY - start.y) / this.transform.zoom;
+      if (!moved && Math.hypot(dx, dy) * this.transform.zoom < 4) return;
+      moved = true;
+      const delta = Math.abs(dx) >= Math.abs(dy) ? dx : dy;
+      card.size = clamp(Math.round(origin + delta), 32, 320);
+      updateIconElementSize(el, card.size);
+    };
+    const onUp = (): void => {
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
+      if (!moved) {
+        this.interactionLock -= 1;
+        return;
+      }
+      void this.persistIconSize(card).finally(() => {
+        this.interactionLock -= 1;
+      });
+    };
     el.addEventListener("pointermove", onMove);
     el.addEventListener("pointerup", onUp);
     el.addEventListener("pointercancel", onUp);
@@ -804,6 +868,15 @@ export class WebDeskView extends ItemView {
         .setIcon("move-up-right")
         .onClick(() => this.beginArrowDraft({ kind: "card", ref: card.path })),
     );
+    menu.addItem((item) =>
+      item
+        .setTitle("为此链接添加评分")
+        .setIcon("star")
+        .onClick(() => this.addRating({
+          x: card.x + card.size + 152,
+          y: card.y + 43,
+        }, card)),
+    );
     menu.addSeparator();
 
     menu.addItem((item) =>
@@ -863,11 +936,21 @@ export class WebDeskView extends ItemView {
 
   private async setIconSize(card: BookmarkCard, size: number): Promise<void> {
     card.size = size;
+    await this.persistIconSize(card);
+    this.render();
+  }
+
+  private async persistIconSize(card: BookmarkCard): Promise<void> {
     const file = this.app.vault.getAbstractFileByPath(card.path);
     if (file instanceof TFile) {
-      await writeDeskFields(this.app, file, { size });
+      await writeDeskFields(this.app, file, { size: card.size });
     }
-    this.render();
+    this.layoutWrites.set(card.path, {
+      x: card.x,
+      y: card.y,
+      size: card.size,
+      at: Date.now(),
+    });
   }
 
   private async removeFromDesk(card: BookmarkCard): Promise<void> {
@@ -1395,6 +1478,137 @@ export class WebDeskView extends ItemView {
 
       this.textBoxEls.set(box.id, el);
     }
+  }
+
+  private renderRatings(): void {
+    const available = new Set(this.cards.map((card) => card.url || card.path));
+    for (const rating of this.host.getRatings()) {
+      rating.value = normalizeRatingValue(rating.value);
+      const state = ratingLinkState(rating.link, available);
+      const linkedCard = rating.link
+        ? this.cards.find((card) => (card.url || card.path) === rating.link?.ref)
+        : undefined;
+      const el = this.canvasEl.createDiv({
+        cls: `web-desk-rating is-${state}`,
+      });
+      el.style.left = `${rating.x}px`;
+      el.style.top = `${rating.y}px`;
+      el.setAttribute("data-rating-id", rating.id);
+
+      const header = el.createDiv({ cls: "web-desk-rating-header" });
+      header.createSpan({
+        cls: "web-desk-rating-link",
+        text: state === "standalone"
+          ? "独立评分"
+          : state === "missing"
+            ? `原链接已移出 · ${rating.link?.title ?? "网页"}`
+            : linkedCard?.title ?? rating.link?.title ?? "网页",
+      });
+      header.createSpan({
+        cls: "web-desk-rating-value",
+        text: rating.value > 0 ? `${rating.value}/5` : "未评分",
+      });
+
+      const stars = el.createDiv({ cls: "web-desk-rating-stars" });
+      for (let value = 1; value <= 5; value += 1) {
+        const star = stars.createEl("button", {
+          cls: `web-desk-rating-star${value <= rating.value ? " is-active" : ""}`,
+          text: "★",
+          attr: {
+            "aria-label": `${value} 星`,
+            "aria-pressed": String(value <= rating.value),
+            title: `${value} 星`,
+          },
+        });
+        star.addEventListener("pointerdown", (event) => event.stopPropagation());
+        star.addEventListener("click", (event) => {
+          event.stopPropagation();
+          this.setRatingValue(rating, rating.value === value ? 0 : value);
+        });
+      }
+
+      el.addEventListener("pointerdown", (event) => this.onRatingPointerDown(event, rating, el));
+      el.addEventListener("contextmenu", (event) => this.onRatingContextMenu(event, rating));
+      this.ratingEls.set(rating.id, el);
+    }
+  }
+
+  private addRating(point: Point, card?: BookmarkCard): void {
+    const ratings = this.host.getRatings();
+    const ref = card ? card.url || card.path : "";
+    if (ref && ratings.some((rating) => rating.link?.ref === ref)) {
+      new Notice("这个链接已经有评分了");
+      return;
+    }
+    ratings.push({
+      id: `r${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`,
+      value: 0,
+      x: Math.round(point.x - 104),
+      y: Math.round(point.y - 43),
+      link: card ? { ref, title: card.title, url: card.url } : undefined,
+    });
+    this.host.setRatings(ratings);
+    this.render();
+  }
+
+  private setRatingValue(rating: Rating, value: number): void {
+    rating.value = normalizeRatingValue(value);
+    this.host.setRatings(this.host.getRatings());
+    this.render();
+  }
+
+  private onRatingPointerDown(event: PointerEvent, rating: Rating, el: HTMLElement): void {
+    if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
+    event.stopPropagation();
+    this.rootEl.focus();
+    this.interactionLock += 1;
+    const start = { x: event.clientX, y: event.clientY };
+    const origin = { x: rating.x, y: rating.y };
+    let moved = false;
+    try { el.setPointerCapture(event.pointerId); } catch {}
+    const onMove = (moveEvent: PointerEvent): void => {
+      const dx = (moveEvent.clientX - start.x) / this.transform.zoom;
+      const dy = (moveEvent.clientY - start.y) / this.transform.zoom;
+      if (!moved && Math.hypot(dx, dy) * this.transform.zoom < 4) return;
+      moved = true;
+      rating.x = Math.round(origin.x + dx);
+      rating.y = Math.round(origin.y + dy);
+      el.style.left = `${rating.x}px`;
+      el.style.top = `${rating.y}px`;
+    };
+    const onUp = (): void => {
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
+      this.interactionLock -= 1;
+      if (moved) this.host.setRatings(this.host.getRatings());
+    };
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
+  }
+
+  private onRatingContextMenu(event: MouseEvent, rating: Rating): void {
+    event.preventDefault();
+    event.stopPropagation();
+    const menu = new Menu();
+    if (rating.link) {
+      menu.addItem((item) =>
+        item.setTitle("解除链接绑定").setIcon("unlink").onClick(() => {
+          delete rating.link;
+          this.host.setRatings(this.host.getRatings());
+          this.render();
+        }),
+      );
+      menu.addSeparator();
+    }
+    menu.addItem((item) =>
+      item.setTitle("删除评分").setIcon("trash-2").onClick(() => {
+        this.host.setRatings(this.host.getRatings().filter((entry) => entry.id !== rating.id));
+        this.render();
+      }),
+    );
+    menu.showAtMouseEvent(event);
   }
 
   private renderImages(): void {
@@ -1972,6 +2186,21 @@ export class WebDeskView extends ItemView {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function updateIconElementSize(el: HTMLElement, size: number): void {
+  el.style.width = `${size + 24}px`;
+  const thumb = el.querySelector<HTMLElement>(".web-desk-icon-thumb");
+  if (thumb) {
+    thumb.style.width = `${size}px`;
+    thumb.style.height = `${size}px`;
+  }
+  const label = el.querySelector<HTMLElement>(".web-desk-icon-label");
+  if (label) label.style.width = `${size + 24}px`;
+  const letter = el.querySelector<HTMLElement>(".web-desk-icon-letter");
+  if (letter) letter.style.fontSize = `${Math.round(size * 0.42)}px`;
+  const handle = el.querySelector<HTMLElement>(".web-desk-icon-resize");
+  if (handle) handle.style.top = `${size - 4}px`;
 }
 
 interface Rect {

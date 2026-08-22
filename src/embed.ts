@@ -4,6 +4,7 @@ import {
   EmbedItem,
   EmbedTextBox,
   findAvailableEmbedItemPosition,
+  findAvailableEmbedRatingPosition,
   parseEmbedData,
 } from "./embed-state";
 import {
@@ -18,9 +19,10 @@ import {
   splitCanvasPaste,
 } from "./clipboard-state";
 import { resizeImageToWidth } from "./image-state";
+import { normalizeRatingValue, ratingLinkState } from "./rating-state";
 import { fetchBookmarkMeta } from "./importer";
 import { GROUP_COLORS } from "./types";
-import type { CanvasImage, WebDeskSettings } from "./types";
+import type { CanvasImage, Rating, WebDeskSettings } from "./types";
 import { colorFromString, faviconUrl, getErrorMessage, isProbablyUrl } from "./util";
 
 interface EmbedCtxLike {
@@ -135,6 +137,7 @@ export class DeskEmbed {
     for (const box of this.data.textboxes ?? []) {
       this.renderTextBox(box);
     }
+    this.renderRatings();
     for (let index = 0; index < this.data.items.length; index += 1) {
       this.renderItem(this.data.items[index], index);
     }
@@ -167,11 +170,14 @@ export class DeskEmbed {
     }
 
     el.createDiv({ cls: "web-desk-icon-label", text: item.title }).style.width = `${size + 24}px`;
+    const handle = el.createDiv({ cls: "web-desk-icon-resize" });
+    handle.style.top = `${size - 4}px`;
     el.setAttribute("data-embed-index", String(index));
     el.setAttribute("aria-label", `${item.title}\n${item.url}`);
 
     el.addEventListener("pointerdown", (event) => this.onItemPointerDown(event, item, el));
     el.addEventListener("contextmenu", (event) => this.onItemContextMenu(event, item));
+    handle.addEventListener("pointerdown", (event) => this.onItemResizePointerDown(event, item, el));
 
     this.iconEls.set(index, el);
   }
@@ -181,6 +187,58 @@ export class DeskEmbed {
     const block = thumb.createDiv({ cls: "web-desk-icon-letter", text: letter });
     block.style.backgroundColor = colorFromString(item.url);
     block.style.fontSize = `${Math.round(size * 0.42)}px`;
+  }
+
+  private renderRatings(): void {
+    const available = new Set(this.data.items.map((item) => item.url));
+    for (const rating of this.data.ratings ?? []) {
+      rating.value = normalizeRatingValue(rating.value);
+      const state = ratingLinkState(rating.link, available);
+      const linkedItem = rating.link
+        ? this.data.items.find((item) => item.url === rating.link?.ref)
+        : undefined;
+      const el = this.canvasEl.createDiv({ cls: `web-desk-rating is-${state}` });
+      el.style.left = `${rating.x}px`;
+      el.style.top = `${rating.y}px`;
+      el.setAttribute("data-rating-id", rating.id);
+
+      const header = el.createDiv({ cls: "web-desk-rating-header" });
+      header.createSpan({
+        cls: "web-desk-rating-link",
+        text: state === "standalone"
+          ? "独立评分"
+          : state === "missing"
+            ? `原链接已移出 · ${rating.link?.title ?? "网页"}`
+            : linkedItem?.title ?? rating.link?.title ?? "网页",
+      });
+      header.createSpan({
+        cls: "web-desk-rating-value",
+        text: rating.value > 0 ? `${rating.value}/5` : "未评分",
+      });
+
+      const stars = el.createDiv({ cls: "web-desk-rating-stars" });
+      for (let value = 1; value <= 5; value += 1) {
+        const star = stars.createEl("button", {
+          cls: `web-desk-rating-star${value <= rating.value ? " is-active" : ""}`,
+          text: "★",
+          attr: {
+            "aria-label": `${value} 星`,
+            "aria-pressed": String(value <= rating.value),
+            title: `${value} 星`,
+          },
+        });
+        star.addEventListener("pointerdown", (event) => event.stopPropagation());
+        star.addEventListener("click", (event) => {
+          event.stopPropagation();
+          rating.value = rating.value === value ? 0 : value;
+          this.renderItems();
+          this.scheduleWrite();
+        });
+      }
+
+      el.addEventListener("pointerdown", (event) => this.onRatingPointerDown(event, rating, el));
+      el.addEventListener("contextmenu", (event) => this.onRatingContextMenu(event, rating));
+    }
   }
 
   private renderTextBox(box: EmbedTextBox): void {
@@ -340,7 +398,12 @@ export class DeskEmbed {
 
   private updateHint(): void {
     this.hintEl.style.display =
-      this.data.items.length === 0 && this.data.images.length === 0 ? "flex" : "none";
+      this.data.items.length === 0 &&
+      this.data.images.length === 0 &&
+      (this.data.textboxes?.length ?? 0) === 0 &&
+      (this.data.ratings?.length ?? 0) === 0
+        ? "flex"
+        : "none";
   }
 
   // ---------- 交互 ----------
@@ -370,6 +433,7 @@ export class DeskEmbed {
         target.closest(".web-desk-icon") ||
         target.closest(".web-desk-image") ||
         target.closest(".web-desk-textbox") ||
+        target.closest(".web-desk-rating") ||
         target.closest(".web-desk-toolbar")
       ) {
         return;
@@ -412,25 +476,34 @@ export class DeskEmbed {
       if (
         target.closest(".web-desk-icon") ||
         target.closest(".web-desk-image") ||
-        target.closest(".web-desk-textbox")
+        target.closest(".web-desk-textbox") ||
+        target.closest(".web-desk-rating")
       ) return;
       event.preventDefault();
       const menu = new Menu();
+      const point = this.clientToCanvas(event.clientX, event.clientY);
       menu.addItem((m) =>
         m.setTitle("添加链接…").setIcon("plus").onClick(() => {
           const url = window.prompt("链接地址");
-          if (url) void this.addUrl(url, this.visibleCenter());
+          if (url) void this.addUrl(url, point);
         }),
       );
       menu.addItem((m) =>
-        m.setTitle("新建文本框").setIcon("sticky-note").onClick(() => this.addTextBox(this.visibleCenter())),
+        m.setTitle("新建文本框").setIcon("sticky-note").onClick(() => this.addTextBox(point)),
+      );
+      menu.addItem((m) =>
+        m.setTitle("新建评分").setIcon("star").onClick(() => this.addRating(point)),
       );
       menu.showAtMouseEvent(event);
     });
   }
 
   private onItemPointerDown(event: PointerEvent, item: EmbedItem, el: HTMLElement): void {
-    if (event.button !== 0 || this.editing) return;
+    if (
+      event.button !== 0 ||
+      this.editing ||
+      (event.target as HTMLElement).closest(".web-desk-icon-resize")
+    ) return;
     event.stopPropagation();
 
     const size = item.size ?? 96;
@@ -464,6 +537,38 @@ export class DeskEmbed {
     el.addEventListener("pointercancel", onUp);
   }
 
+  private onItemResizePointerDown(
+    event: PointerEvent,
+    item: EmbedItem,
+    el: HTMLElement,
+  ): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const start = { x: event.clientX, y: event.clientY };
+    const origin = item.size ?? 96;
+    let moved = false;
+    try { el.setPointerCapture(event.pointerId); } catch {}
+    const onMove = (moveEvent: PointerEvent): void => {
+      const dx = (moveEvent.clientX - start.x) / this.zoom;
+      const dy = (moveEvent.clientY - start.y) / this.zoom;
+      if (!moved && Math.hypot(dx, dy) * this.zoom < 4) return;
+      moved = true;
+      const delta = Math.abs(dx) >= Math.abs(dy) ? dx : dy;
+      item.size = Math.min(320, Math.max(32, Math.round(origin + delta)));
+      updateEmbedIconElementSize(el, item.size);
+    };
+    const onUp = (): void => {
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
+      if (moved) this.scheduleWrite();
+    };
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
+  }
+
   private onItemContextMenu(event: MouseEvent, item: EmbedItem): void {
     event.preventDefault();
     event.stopPropagation();
@@ -475,6 +580,12 @@ export class DeskEmbed {
         new Notice("已复制链接");
       }),
     );
+    menu.addItem((m) =>
+      m.setTitle("为此链接添加评分").setIcon("star").onClick(() => {
+        const size = item.size ?? 96;
+        this.addRating({ x: item.x + size + 152, y: item.y + 43 }, item);
+      }),
+    );
     menu.addSeparator();
     menu.addItem((m) => m.setTitle("删除条目").setIcon("trash-2").onClick(() => {
       this.data.items = this.data.items.filter((entry) => entry !== item);
@@ -482,6 +593,84 @@ export class DeskEmbed {
       this.updateHint();
       this.scheduleWrite();
     }));
+    menu.showAtMouseEvent(event);
+  }
+
+  private addRating(point: { x: number; y: number }, item?: EmbedItem): void {
+    const ratings = this.data.ratings ?? (this.data.ratings = []);
+    if (item && ratings.some((rating) => rating.link?.ref === item.url)) {
+      new Notice("这个链接已经有评分了");
+      return;
+    }
+    const desired = {
+      x: Math.round(point.x - 104),
+      y: Math.round(point.y - 43),
+    };
+    const position = item
+      ? findAvailableEmbedRatingPosition(this.data, desired)
+      : desired;
+    ratings.push({
+      id: `r${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`,
+      value: 0,
+      x: position.x,
+      y: position.y,
+      link: item ? { ref: item.url, title: item.title, url: item.url } : undefined,
+    });
+    this.renderItems();
+    this.updateHint();
+    this.scheduleWrite();
+  }
+
+  private onRatingPointerDown(event: PointerEvent, rating: Rating, el: HTMLElement): void {
+    if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
+    event.stopPropagation();
+    const start = { x: event.clientX, y: event.clientY };
+    const origin = { x: rating.x, y: rating.y };
+    let moved = false;
+    try { el.setPointerCapture(event.pointerId); } catch {}
+    const onMove = (moveEvent: PointerEvent): void => {
+      const dx = (moveEvent.clientX - start.x) / this.zoom;
+      const dy = (moveEvent.clientY - start.y) / this.zoom;
+      if (!moved && Math.hypot(dx, dy) * this.zoom < 4) return;
+      moved = true;
+      rating.x = Math.round(origin.x + dx);
+      rating.y = Math.round(origin.y + dy);
+      el.style.left = `${rating.x}px`;
+      el.style.top = `${rating.y}px`;
+    };
+    const onUp = (): void => {
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
+      if (moved) this.scheduleWrite();
+    };
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
+  }
+
+  private onRatingContextMenu(event: MouseEvent, rating: Rating): void {
+    event.preventDefault();
+    event.stopPropagation();
+    const menu = new Menu();
+    if (rating.link) {
+      menu.addItem((item) =>
+        item.setTitle("解除链接绑定").setIcon("unlink").onClick(() => {
+          delete rating.link;
+          this.renderItems();
+          this.scheduleWrite();
+        }),
+      );
+      menu.addSeparator();
+    }
+    menu.addItem((item) =>
+      item.setTitle("删除评分").setIcon("trash-2").onClick(() => {
+        this.data.ratings = (this.data.ratings ?? []).filter((entry) => entry.id !== rating.id);
+        this.renderItems();
+        this.updateHint();
+        this.scheduleWrite();
+      }),
+    );
     menu.showAtMouseEvent(event);
   }
 
@@ -751,4 +940,19 @@ function rgba(hex: string, alpha: number): string {
   if (!match) return `rgba(127,127,127,${alpha})`;
   const value = Number.parseInt(match[1], 16);
   return `rgba(${(value >> 16) & 0xff},${(value >> 8) & 0xff},${value & 0xff},${alpha})`;
+}
+
+function updateEmbedIconElementSize(el: HTMLElement, size: number): void {
+  el.style.width = `${size + 24}px`;
+  const thumb = el.querySelector<HTMLElement>(".web-desk-icon-thumb");
+  if (thumb) {
+    thumb.style.width = `${size}px`;
+    thumb.style.height = `${size}px`;
+  }
+  const label = el.querySelector<HTMLElement>(".web-desk-icon-label");
+  if (label) label.style.width = `${size + 24}px`;
+  const letter = el.querySelector<HTMLElement>(".web-desk-icon-letter");
+  if (letter) letter.style.fontSize = `${Math.round(size * 0.42)}px`;
+  const handle = el.querySelector<HTMLElement>(".web-desk-icon-resize");
+  if (handle) handle.style.top = `${size - 4}px`;
 }

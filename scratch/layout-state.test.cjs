@@ -54,19 +54,19 @@ test("null 只删除显式指定的布局字段", () => {
 });
 
 test("近期本地布局写回同时恢复坐标和已放置状态", () => {
-  const card = { x: 172, y: 40, placed: false };
+  const card = { x: 172, y: 40, size: 96, placed: false };
   const result = applyRecentLayoutWrite(
     card,
-    { x: 380, y: 140, at: 10_000 },
+    { x: 380, y: 140, size: 144, at: 10_000 },
     10_500,
   );
 
   assert.equal(result, "applied");
-  assert.deepEqual(card, { x: 380, y: 140, placed: true });
+  assert.deepEqual(card, { x: 380, y: 140, size: 144, placed: true });
 });
 
 test("过期的本地布局写回不覆盖权威坐标", () => {
-  const card = { x: 172, y: 40, placed: true };
+  const card = { x: 172, y: 40, size: 96, placed: true };
   const result = applyRecentLayoutWrite(
     card,
     { x: 380, y: 140, at: 1_000 },
@@ -74,5 +74,5 @@ test("过期的本地布局写回不覆盖权威坐标", () => {
   );
 
   assert.equal(result, "expired");
-  assert.deepEqual(card, { x: 172, y: 40, placed: true });
+  assert.deepEqual(card, { x: 172, y: 40, size: 96, placed: true });
 });

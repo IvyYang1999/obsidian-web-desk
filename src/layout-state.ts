@@ -8,12 +8,14 @@ export interface DeskPatch {
 export interface RecentLayoutWrite {
   x: number;
   y: number;
+  size?: number;
   at: number;
 }
 
 interface LayoutCardState {
   x: number;
   y: number;
+  size: number;
   placed: boolean;
 }
 
@@ -43,6 +45,7 @@ export function applyRecentLayoutWrite(
   if (now - write.at > ttlMs) return "expired";
   card.x = write.x;
   card.y = write.y;
+  if (write.size !== undefined) card.size = write.size;
   card.placed = true;
   return "applied";
 }

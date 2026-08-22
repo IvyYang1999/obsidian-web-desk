@@ -1,4 +1,4 @@
-import type { CanvasImage } from "./types";
+import type { CanvasImage, Rating } from "./types";
 
 export interface EmbedItem {
   url: string;
@@ -23,6 +23,7 @@ export interface EmbedData {
   items: EmbedItem[];
   images: CanvasImage[];
   textboxes?: EmbedTextBox[];
+  ratings?: Rating[];
 }
 
 interface EmbedRect {
@@ -37,6 +38,23 @@ export function findAvailableEmbedItemPosition(
   desired: { x: number; y: number },
   size = 96,
 ): { x: number; y: number } {
+  return findAvailableEmbedPosition(data, desired, size, size + 42, size + 32);
+}
+
+export function findAvailableEmbedRatingPosition(
+  data: EmbedData,
+  desired: { x: number; y: number },
+): { x: number; y: number } {
+  return findAvailableEmbedPosition(data, desired, 208, 86, 240);
+}
+
+function findAvailableEmbedPosition(
+  data: EmbedData,
+  desired: { x: number; y: number },
+  width: number,
+  height: number,
+  step: number,
+): { x: number; y: number } {
   const occupied: EmbedRect[] = [
     ...data.items.map((item) => ({
       x: item.x,
@@ -46,10 +64,10 @@ export function findAvailableEmbedItemPosition(
     })),
     ...data.images.map((image) => ({ x: image.x, y: image.y, w: image.w, h: image.h })),
     ...(data.textboxes ?? []).map((box) => ({ x: box.x, y: box.y, w: box.w, h: box.h })),
+    ...(data.ratings ?? []).map((rating) => ({ x: rating.x, y: rating.y, w: 208, h: 86 })),
   ];
-  const step = size + 32;
   const isFree = (x: number, y: number): boolean => {
-    const candidate = { x, y, w: size, h: size + 42 };
+    const candidate = { x, y, w: width, h: height };
     const margin = 16;
     return occupied.every((rect) =>
       candidate.x + candidate.w + margin <= rect.x ||
@@ -59,14 +77,27 @@ export function findAvailableEmbedItemPosition(
     );
   };
 
-  for (let ring = 0; ring <= 16; ring += 1) {
-    for (let row = -ring; row <= ring; row += 1) {
-      for (let column = -ring; column <= ring; column += 1) {
-        if (ring > 0 && Math.max(Math.abs(column), Math.abs(row)) !== ring) continue;
-        const x = Math.round(desired.x + column * step);
-        const y = Math.round(desired.y + row * step);
-        if (isFree(x, y)) return { x, y };
-      }
+  if (isFree(desired.x, desired.y)) {
+    return { x: Math.round(desired.x), y: Math.round(desired.y) };
+  }
+
+  // 从右侧开始顺时针扩圈：连续添加时优先留在当前可视区域，而不是向左上角逸出。
+  for (let ring = 1; ring <= 16; ring += 1) {
+    const offsets: Array<{ column: number; row: number }> = [];
+    for (let row = 0; row <= ring; row += 1) offsets.push({ column: ring, row });
+    for (let column = ring - 1; column >= -ring; column -= 1) {
+      offsets.push({ column, row: ring });
+    }
+    for (let row = ring - 1; row >= -ring; row -= 1) {
+      offsets.push({ column: -ring, row });
+    }
+    for (let column = -ring + 1; column <= ring; column += 1) {
+      offsets.push({ column, row: -ring });
+    }
+    for (const offset of offsets) {
+      const x = Math.round(desired.x + offset.column * step);
+      const y = Math.round(desired.y + offset.row * step);
+      if (isFree(x, y)) return { x, y };
     }
   }
 
@@ -84,6 +115,7 @@ export function parseEmbedData(source: string): EmbedData {
         images: Array.isArray(parsed.images) ? parsed.images : [],
       };
       if (Array.isArray(parsed.textboxes)) data.textboxes = parsed.textboxes;
+      if (Array.isArray(parsed.ratings)) data.ratings = parsed.ratings;
       return data;
     }
   } catch {
@@ -95,7 +127,7 @@ export function parseEmbedData(source: string): EmbedData {
 export function createEmptyEmbedBlock(): string {
   return [
     "```web-desk",
-    JSON.stringify({ items: [], images: [], textboxes: [] }),
+    JSON.stringify({ items: [], images: [], textboxes: [], ratings: [] }),
     "```",
   ].join("\n");
 }

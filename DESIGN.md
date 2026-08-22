@@ -17,11 +17,13 @@
 | `--wd-space-1/2/3` | 4/8/12px 重复间距 |
 | `--wd-shadow-sm/md` | 静止态与 hover/选中态阴影 |
 | `--wd-motion-fast` | hover 与边框反馈动画 |
+| `--wd-rating-active` | 评分星级的语义强调色，优先继承主题黄色 |
 
 ## 组件约束
 
 - `web-desk-toolbar`：只放视图级短操作，按钮统一使用 `web-desk-tool-btn`。
 - `web-desk-icon`：网页收藏；视觉重心是方形缩略图和两行标题。
+- `web-desk-rating`：1–5 星评分；可独立或语义绑定网页，链接失效时保留评分并使用 missing 状态。
 - `web-desk-image`：Vault 图片附件；拖动主体，右下角手柄等比例缩放。
 - `web-desk-textbox`：自由备注；允许非等比例调整。
 - `web-desk-group`：归类范围；虚线边框，不承载正文内容。
