@@ -76,6 +76,29 @@ test("正文插入项生成可解析的空 web-desk 代码块", () => {
   assert.deepEqual(JSON.parse(json), { items: [], images: [], textboxes: [] });
 });
 
+test("内嵌画布新链接避开已有卡片、图片和文本框", () => {
+  const desired = { x: 100, y: 100 };
+  const data = {
+    items: [{ url: "https://one.example", title: "one", x: 100, y: 100, size: 96 }],
+    images: [{ id: "i1", path: "image.png", x: -28, y: -28, w: 96, h: 96 }],
+    textboxes: [{ id: "t1", text: "note", x: 228, y: 100, w: 120, h: 100 }],
+  };
+
+  const placed = embedState.findAvailableEmbedItemPosition(data, desired);
+  assert.notDeepEqual(placed, desired);
+  assert.deepEqual(placed, { x: -28, y: 100 });
+});
+
+test("内嵌画布中心空闲时保留用户期望落点", () => {
+  assert.deepEqual(
+    embedState.findAvailableEmbedItemPosition(
+      { items: [], images: [], textboxes: [] },
+      { x: 100, y: 100 },
+    ),
+    { x: 100, y: 100 },
+  );
+});
+
 test("粘贴一个或多个整行 URL 时全部进入链接导入", () => {
   assert.deepEqual(
     clipboardState.splitCanvasPaste("https://example.com\ncomponent.gallery"),
@@ -123,5 +146,29 @@ test("内嵌画布文本框编辑态仍保留原生粘贴", () => {
   assert.equal(
     clipboardState.isEditablePasteTarget(target, canvasBoundary),
     true,
+  );
+});
+
+test("内嵌画布拥有 URL 事件目标时不受宿主 defaultPrevented 影响", () => {
+  assert.equal(
+    clipboardState.shouldClaimEmbeddedCanvasPaste({
+      defaultPrevented: true,
+      editableTarget: false,
+      imageCount: 0,
+      paste: { urls: ["https://example.com"], text: "" },
+    }),
+    true,
+  );
+});
+
+test("内嵌画布文本框编辑态即使含 URL 也不劫持原生粘贴", () => {
+  assert.equal(
+    clipboardState.shouldClaimEmbeddedCanvasPaste({
+      defaultPrevented: false,
+      editableTarget: true,
+      imageCount: 0,
+      paste: { urls: ["https://example.com"], text: "" },
+    }),
+    false,
   );
 });

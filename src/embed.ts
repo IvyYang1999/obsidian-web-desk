@@ -1,12 +1,22 @@
 import { App, Menu, Notice, TFile, debounce } from "obsidian";
-import { EmbedData, EmbedItem, EmbedTextBox, parseEmbedData } from "./embed-state";
+import {
+  EmbedData,
+  EmbedItem,
+  EmbedTextBox,
+  findAvailableEmbedItemPosition,
+  parseEmbedData,
+} from "./embed-state";
 import {
   imageFilesFrom,
   imageFilesFromClipboard,
   imageResourceUrl,
   storeImageFile,
 } from "./image-storage";
-import { isEditablePasteTarget, splitCanvasPaste } from "./clipboard-state";
+import {
+  isEditablePasteTarget,
+  shouldClaimEmbeddedCanvasPaste,
+  splitCanvasPaste,
+} from "./clipboard-state";
 import { resizeImageToWidth } from "./image-state";
 import { fetchBookmarkMeta } from "./importer";
 import { GROUP_COLORS } from "./types";
@@ -21,6 +31,7 @@ interface EmbedCtxLike {
 const EMBED_HEIGHT = 420;
 const MIN_ZOOM = 0.3;
 const MAX_ZOOM = 2;
+let pendingEmbedFocus: { key: string; expiresAt: number } | null = null;
 
 /**
  * 笔记内嵌画布（```web-desk code block）。
@@ -41,6 +52,7 @@ export class DeskEmbed {
   private canvasEl!: HTMLElement;
   private hintEl!: HTMLElement;
   private zoomEl!: HTMLElement;
+  private embedKey = "";
   private iconEls = new Map<number, HTMLElement>();
   private zoom = 1;
   private panX = 0;
@@ -67,6 +79,7 @@ export class DeskEmbed {
   render(): void {
     this.el.empty();
     this.el.addClass("web-desk-embed-host");
+    this.embedKey = this.resolveEmbedKey();
 
     this.rootEl = this.el.createDiv({ cls: "web-desk-embed" });
     this.rootEl.tabIndex = 0;
@@ -91,6 +104,23 @@ export class DeskEmbed {
     this.renderItems();
     this.updateHint();
     this.applyTransform();
+    if (pendingEmbedFocus?.key === this.embedKey) {
+      const pending = pendingEmbedFocus;
+      pendingEmbedFocus = null;
+      queueMicrotask(() => {
+        if (Date.now() <= pending.expiresAt && this.rootEl.isConnected) {
+          this.rootEl.focus({ preventScroll: true });
+        }
+      });
+    }
+  }
+
+  private resolveEmbedKey(): string {
+    const lineStart = this.ctx.getSectionInfo(this.el)?.lineStart;
+    if (lineStart !== undefined) return `${this.filePath}:${lineStart}`;
+    const leaf = this.el.closest(".workspace-leaf");
+    const hosts = Array.from(leaf?.querySelectorAll(".web-desk-embed-host") ?? []);
+    return `${this.filePath}:block-${Math.max(0, hosts.indexOf(this.el))}`;
   }
 
   // ---------- 渲染 ----------
@@ -316,6 +346,14 @@ export class DeskEmbed {
   // ---------- 交互 ----------
 
   private bindCanvasEvents(): void {
+    // 卡片、图片等子元素不会自动把焦点交给可聚焦的画布祖先。
+    // 明确认领焦点，确保下一次粘贴仍进入这个画布；文本框编辑态除外。
+    this.rootEl.addEventListener("pointerdown", (event) => {
+      if (!isEditablePasteTarget(event.target, this.rootEl)) {
+        this.rootEl.focus({ preventScroll: true });
+      }
+    }, { capture: true });
+
     // 普通滚轮留给笔记滚动；Ctrl/Cmd+滚轮缩放画布
     this.rootEl.addEventListener("wheel", (event) => {
       if (!(event.ctrlKey || event.metaKey)) return;
@@ -564,21 +602,24 @@ export class DeskEmbed {
 
   private async onPaste(event: ClipboardEvent): Promise<void> {
     const imageFiles = imageFilesFromClipboard(event.clipboardData);
-    if (isEditablePasteTarget(event.target, this.rootEl)) return;
+    const clipboardText =
+      event.clipboardData?.getData("text/uri-list") ||
+      event.clipboardData?.getData("text/plain") ||
+      "";
+    const paste = splitCanvasPaste(clipboardText);
+    if (!shouldClaimEmbeddedCanvasPaste({
+      defaultPrevented: event.defaultPrevented,
+      editableTarget: isEditablePasteTarget(event.target, this.rootEl),
+      imageCount: imageFiles.length,
+      paste,
+    })) return;
+
     if (imageFiles.length > 0) {
       event.preventDefault();
       event.stopPropagation();
       await this.importImages(imageFiles, this.visibleCenter());
       return;
     }
-    if (event.defaultPrevented) return;
-
-    const clipboardText =
-      event.clipboardData?.getData("text/uri-list") ||
-      event.clipboardData?.getData("text/plain") ||
-      "";
-    const paste = splitCanvasPaste(clipboardText);
-    if (paste.urls.length === 0 && !paste.text) return;
 
     event.preventDefault();
     event.stopPropagation();
@@ -621,12 +662,16 @@ export class DeskEmbed {
     try {
       new Notice(`正在抓取：${rawUrl}`);
       const meta = await fetchBookmarkMeta(rawUrl);
+      const position = findAvailableEmbedItemPosition(this.data, {
+        x: Math.round(point.x - 48),
+        y: Math.round(point.y - 48),
+      });
       this.data.items.push({
         url: meta.url,
         title: meta.title,
         description: meta.description,
-        x: Math.round(point.x - 48),
-        y: Math.round(point.y - 48),
+        x: position.x,
+        y: position.y,
         size: 96,
       });
       if (!quiet) {
@@ -667,6 +712,11 @@ export class DeskEmbed {
   private async writeBack(): Promise<void> {
     const file = this.app.vault.getAbstractFileByPath(this.filePath);
     if (!(file instanceof TFile)) return;
+
+    const active = this.rootEl.ownerDocument.activeElement;
+    pendingEmbedFocus = active === this.rootEl || this.rootEl.contains(active)
+      ? { key: this.embedKey, expiresAt: Date.now() + 2_000 }
+      : null;
 
     const info = this.ctx.getSectionInfo(this.el);
     if (info) {
