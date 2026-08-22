@@ -563,14 +563,15 @@ export class DeskEmbed {
   }
 
   private async onPaste(event: ClipboardEvent): Promise<void> {
-    if (event.defaultPrevented || isEditablePasteTarget(event.target)) return;
     const imageFiles = imageFilesFromClipboard(event.clipboardData);
+    if (isEditablePasteTarget(event.target, this.rootEl)) return;
     if (imageFiles.length > 0) {
       event.preventDefault();
       event.stopPropagation();
       await this.importImages(imageFiles, this.visibleCenter());
       return;
     }
+    if (event.defaultPrevented) return;
 
     const clipboardText =
       event.clipboardData?.getData("text/uri-list") ||

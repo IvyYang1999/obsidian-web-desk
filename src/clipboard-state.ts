@@ -42,12 +42,18 @@ export function splitCanvasPaste(
   return { urls, text: textLines.join("\n") };
 }
 
-export function isEditablePasteTarget(target: EventTarget | null): boolean {
+export function isEditablePasteTarget(
+  target: EventTarget | null,
+  boundary?: Element,
+): boolean {
   const candidate = target as { closest?: (selector: string) => Element | null } | null;
   if (typeof candidate?.closest !== "function") return false;
-  return Boolean(
-    candidate.closest(
-      'input, textarea, [contenteditable="true"], [contenteditable="plaintext-only"]',
-    ),
+  const editable = candidate.closest(
+    'input, textarea, [contenteditable="true"], [contenteditable="plaintext-only"]',
   );
+  if (!editable) return false;
+
+  // 内嵌画布本身位于 Obsidian 的 contenteditable 编辑器中；边界外的可编辑祖先
+  // 不代表用户正在编辑画布里的文本。只有画布内部的文本编辑器才应保留原生粘贴。
+  return boundary === undefined || editable === boundary || boundary.contains(editable);
 }

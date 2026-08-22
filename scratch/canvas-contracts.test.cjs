@@ -103,3 +103,25 @@ test("单个普通单词按文本处理，不误判成裸域名", () => {
     text: "hello",
   });
 });
+
+test("内嵌画布不把 Obsidian 正文编辑器祖先误判为画布内文本编辑", () => {
+  const outerEditor = {};
+  const target = { closest: () => outerEditor };
+  const canvasBoundary = { contains: () => false };
+
+  assert.equal(
+    clipboardState.isEditablePasteTarget(target, canvasBoundary),
+    false,
+  );
+});
+
+test("内嵌画布文本框编辑态仍保留原生粘贴", () => {
+  const innerTextEditor = {};
+  const target = { closest: () => innerTextEditor };
+  const canvasBoundary = { contains: (element) => element === innerTextEditor };
+
+  assert.equal(
+    clipboardState.isEditablePasteTarget(target, canvasBoundary),
+    true,
+  );
+});
