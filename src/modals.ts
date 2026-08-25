@@ -1,4 +1,104 @@
 import { App, Modal } from "obsidian";
+import { normalizeCardProperties } from "./card-properties-state";
+import type { CardProperties } from "./types";
+
+export class CardPropertiesModal extends Modal {
+  private readonly initial: CardProperties;
+  private readonly onSubmit: (value: CardProperties) => void;
+
+  constructor(
+    app: App,
+    options: { initial: CardProperties; onSubmit: (value: CardProperties) => void },
+  ) {
+    super(app);
+    this.initial = normalizeCardProperties(options.initial, options.initial.title);
+    this.onSubmit = options.onSubmit;
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("web-desk-card-properties");
+    contentEl.createEl("h2", { text: "编辑网页属性" });
+
+    const form = contentEl.createEl("form");
+    const titleField = form.createDiv({ cls: "web-desk-property-field" });
+    titleField.createEl("label", { text: "名称" });
+    const titleInput = titleField.createEl("input", { type: "text" });
+    titleInput.value = this.initial.title;
+    titleInput.required = true;
+
+    const ratingField = form.createDiv({ cls: "web-desk-property-field" });
+    ratingField.createEl("label", { text: "评分" });
+    const ratingButtons = ratingField.createDiv({ cls: "web-desk-property-rating" });
+    let rating = this.initial.rating;
+    const buttons: HTMLButtonElement[] = [];
+    const refreshRating = (): void => {
+      buttons.forEach((button, index) => {
+        const value = index + 1;
+        button.toggleClass("is-active", value <= rating);
+        button.setAttribute("aria-pressed", String(value <= rating));
+      });
+    };
+    for (let value = 1; value <= 5; value += 1) {
+      const button = ratingButtons.createEl("button", {
+        text: "★",
+        attr: { "aria-label": `${value} 星` },
+      });
+      button.type = "button";
+      button.addEventListener("click", () => {
+        rating = rating === value ? 0 : value;
+        refreshRating();
+      });
+      buttons.push(button);
+    }
+    const clearRating = ratingButtons.createEl("button", {
+      text: "清除",
+      cls: "web-desk-property-rating-clear",
+    });
+    clearRating.type = "button";
+    clearRating.addEventListener("click", () => {
+      rating = 0;
+      refreshRating();
+    });
+    refreshRating();
+
+    const noteField = form.createDiv({ cls: "web-desk-property-field" });
+    noteField.createEl("label", { text: "备注" });
+    const noteInput = noteField.createEl("textarea");
+    noteInput.rows = 5;
+    noteInput.placeholder = "写下你对这个网页的判断、用途或下一步…";
+    noteInput.value = this.initial.note;
+
+    const actions = form.createDiv({ cls: "web-desk-modal-buttons" });
+    const cancel = actions.createEl("button", { text: "取消" });
+    cancel.type = "button";
+    cancel.addEventListener("click", () => this.close());
+    const save = actions.createEl("button", { text: "保存", cls: "mod-cta" });
+    save.type = "submit";
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const properties = normalizeCardProperties({
+        title: titleInput.value,
+        rating,
+        note: noteInput.value,
+      }, this.initial.title);
+      this.close();
+      this.onSubmit(properties);
+    });
+
+    window.setTimeout(() => {
+      titleInput.focus();
+      titleInput.select();
+    }, 0);
+  }
+
+  onClose(): void {
+    this.contentEl.removeClass("web-desk-card-properties");
+    this.contentEl.empty();
+  }
+}
 
 export class TextInputModal extends Modal {
   private readonly title: string;

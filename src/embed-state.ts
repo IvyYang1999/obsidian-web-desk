@@ -7,6 +7,8 @@ export interface EmbedItem {
   path?: string;
   title: string;
   description?: string;
+  rating?: number;
+  note?: string;
   x: number;
   y: number;
   size?: number;

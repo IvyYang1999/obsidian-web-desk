@@ -278,6 +278,33 @@ test("文内画布往返保留逻辑组合与评分缩放", () => {
   assert.equal(data.ratings[0].objectGroup, "og1");
 });
 
+test("网页名称、评分与备注属于卡片本身且两种画布共用属性编辑器", () => {
+  const parsed = embedState.parseEmbedData(JSON.stringify({
+    items: [{
+      url: "https://one.example",
+      title: "One",
+      rating: 4,
+      note: "稍后复盘",
+      x: 1,
+      y: 2,
+    }],
+  }));
+  assert.equal(parsed.items[0].rating, 4);
+  assert.equal(parsed.items[0].note, "稍后复盘");
+
+  const view = fs.readFileSync("src/view.ts", "utf8");
+  const embed = fs.readFileSync("src/embed.ts", "utf8");
+  assert.match(view, /CardPropertiesModal/);
+  assert.match(embed, /CardPropertiesModal/);
+  assert.match(view, /renderCardPropertyIndicators/);
+  assert.match(embed, /renderCardPropertyIndicators/);
+  assert.doesNotMatch(view, /为此链接添加评分/);
+  assert.doesNotMatch(embed, /为此链接添加评分/);
+  const modals = fs.readFileSync("src/modals.ts", "utf8");
+  assert.match(modals, /button\.type = "button"/);
+  assert.match(modals, /save\.type = "submit"/);
+});
+
 test("正文插入项生成可解析的空 web-desk 代码块", () => {
   const block = embedState.createEmptyEmbedBlock();
   assert.match(block, /^```web-desk\n/);

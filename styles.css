@@ -1,6 +1,7 @@
 /* 网页桌面 · 画布 */
 .web-desk-view,
 .web-desk-embed-host,
+.web-desk-card-properties,
 .web-desk-modal-buttons {
   --wd-surface: var(--background-secondary);
   --wd-border-color: var(--background-modifier-border);
@@ -84,6 +85,7 @@
 }
 
 .web-desk-icon-thumb {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -93,6 +95,45 @@
   box-shadow: var(--wd-shadow-sm);
   overflow: hidden;
   transition: box-shadow var(--wd-motion-fast), border-color var(--wd-motion-fast);
+}
+
+.web-desk-card-rating-badge,
+.web-desk-card-note-badge {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-normal);
+  background: color-mix(in srgb, var(--background-primary) 88%, transparent);
+  border: 1px solid var(--wd-border-color);
+  box-shadow: var(--wd-shadow-sm);
+  pointer-events: none;
+}
+
+.web-desk-card-rating-badge {
+  top: var(--wd-space-2);
+  right: var(--wd-space-2);
+  min-width: 28px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  color: var(--wd-rating-active);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.web-desk-card-note-badge {
+  right: var(--wd-space-2);
+  bottom: var(--wd-space-2);
+  width: 24px;
+  height: 24px;
+  border-radius: var(--wd-radius-sm);
+}
+
+.web-desk-card-note-badge svg {
+  width: 14px;
+  height: 14px;
 }
 
 .web-desk-icon:hover .web-desk-icon-thumb {
@@ -362,6 +403,58 @@
   justify-content: flex-end;
   gap: var(--wd-space-2);
   margin-top: var(--wd-space-3);
+}
+
+.web-desk-card-properties form,
+.web-desk-property-field {
+  display: flex;
+  flex-direction: column;
+}
+
+.web-desk-card-properties form {
+  gap: 16px;
+}
+
+.web-desk-property-field {
+  gap: var(--wd-space-2);
+}
+
+.web-desk-property-field > label {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-weight: 600;
+}
+
+.web-desk-property-field input,
+.web-desk-property-field textarea {
+  width: 100%;
+}
+
+.web-desk-property-field textarea {
+  resize: vertical;
+  min-height: 96px;
+}
+
+.web-desk-property-rating {
+  display: flex;
+  align-items: center;
+  gap: var(--wd-space-1);
+}
+
+.web-desk-property-rating > button:not(.web-desk-property-rating-clear) {
+  width: 36px;
+  padding: 4px;
+  color: var(--text-faint);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.web-desk-property-rating > button.is-active {
+  color: var(--wd-rating-active);
+}
+
+.web-desk-property-rating-clear {
+  margin-left: var(--wd-space-2);
 }
 
 /* 笔记内嵌画布 */

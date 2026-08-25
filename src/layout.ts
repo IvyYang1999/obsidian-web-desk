@@ -1,6 +1,7 @@
 import { App, TFile } from "obsidian";
 import { applyDeskPatch, DeskPatch } from "./layout-state";
 import { BookmarkCard } from "./types";
+import { normalizeCardRating } from "./card-properties-state";
 
 /** 图标容器宽度（含留白），自动排布网格用。 */
 const GRID_STEP = 132;
@@ -43,6 +44,8 @@ export function readCard(file: TFile, app: App, defaultSize: number): BookmarkCa
     host,
     type: typeof fm.type === "string" ? fm.type : "",
     description: typeof fm.description === "string" ? fm.description : "",
+    rating: normalizeCardRating(fm.desk_rating),
+    note: typeof fm.desk_note === "string" ? fm.desk_note.trim() : "",
     x,
     y,
     size,

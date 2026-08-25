@@ -28,7 +28,9 @@ import { resizeImageToWidth } from "./image-state";
 import { replaceEmbedMarker } from "./embed-write-state";
 import { normalizeRatingValue, ratingLinkState } from "./rating-state";
 import { fetchBookmarkMeta } from "./importer";
-import { TextInputModal } from "./modals";
+import { CardPropertiesModal, TextInputModal } from "./modals";
+import { normalizeCardRating } from "./card-properties-state";
+import { cardAccessibleLabel, renderCardPropertyIndicators } from "./card-properties-ui";
 import { beginCanvasPointerSession } from "./canvas-pointer";
 import {
   GroupObjectRect,
@@ -265,13 +267,20 @@ export class DeskEmbed {
     } else {
       this.appendLetter(thumb, item, size);
     }
+    renderCardPropertyIndicators(thumb, item.rating, item.note);
 
     el.createDiv({ cls: "web-desk-icon-label", text: item.title }).style.width = `${size + 24}px`;
     const handle = el.createDiv({ cls: "web-desk-icon-resize" });
     handle.style.top = `${size - 4}px`;
     el.setAttribute("data-embed-index", String(index));
     el.setAttribute("data-card-ref", embedItemRef(item));
-    el.setAttribute("aria-label", `${item.title}\n${item.path || item.url}`);
+    el.setAttribute("aria-label", cardAccessibleLabel(
+      item.title,
+      item.path || item.url,
+      item.rating,
+      item.note,
+    ));
+    if (item.note?.trim()) el.setAttribute("title", item.note.trim());
 
     el.addEventListener("pointerdown", (event) => this.onItemPointerDown(event, item, el));
     el.addEventListener("contextmenu", (event) => this.onItemContextMenu(event, item));
@@ -1346,13 +1355,19 @@ export class DeskEmbed {
         void navigator.clipboard.writeText(item.url);
         new Notice("已复制链接");
       }));
+      menu.addItem((m) => m
+        .setTitle("编辑名称、评分与备注…")
+        .setIcon("square-pen")
+        .onClick(() => this.editWebItemProperties(item)));
     }
-    menu.addItem((m) =>
-      m.setTitle(item.path ? "为此文件添加评分" : "为此链接添加评分").setIcon("star").onClick(() => {
-        const size = item.size ?? 96;
-        this.addRating({ x: item.x + size + 152, y: item.y + 43 }, item);
-      }),
-    );
+    if (item.path) {
+      menu.addItem((m) =>
+        m.setTitle("为此文件添加评分").setIcon("star").onClick(() => {
+          const size = item.size ?? 96;
+          this.addRating({ x: item.x + size + 152, y: item.y + 43 }, item);
+        }),
+      );
+    }
     menu.addItem((m) =>
       m.setTitle("从这里画箭头").setIcon("move-up-right").onClick(() => {
         this.beginArrowDraft({ kind: "card", ref });
@@ -1369,6 +1384,24 @@ export class DeskEmbed {
     menu.addSeparator();
     this.appendEmbedObjectGroupMenu(menu);
     menu.showAtMouseEvent(event);
+  }
+
+  private editWebItemProperties(item: EmbedItem): void {
+    new CardPropertiesModal(this.app, {
+      initial: {
+        title: item.title,
+        rating: normalizeCardRating(item.rating),
+        note: item.note ?? "",
+      },
+      onSubmit: (properties) => {
+        item.title = properties.title;
+        item.rating = properties.rating || undefined;
+        item.note = properties.note || undefined;
+        this.renderItems();
+        this.scheduleWrite();
+        new Notice("网页属性已保存");
+      },
+    }).open();
   }
 
   private addRating(point: { x: number; y: number }, item?: EmbedItem): void {

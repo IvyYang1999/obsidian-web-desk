@@ -15,8 +15,10 @@ import {
 } from "./file-link-storage";
 import { planAutoPositions, readCard, writeDeskFields } from "./layout";
 import { applyRecentLayoutWrite, RecentLayoutWrite } from "./layout-state";
-import { ConfirmModal, TextInputModal } from "./modals";
+import { CardPropertiesModal, ConfirmModal, TextInputModal } from "./modals";
 import { normalizeRatingValue, ratingLinkState } from "./rating-state";
+import { applyCardPropertiesToFrontmatter } from "./card-properties-state";
+import { cardAccessibleLabel, renderCardPropertyIndicators } from "./card-properties-ui";
 import { beginCanvasPointerSession } from "./canvas-pointer";
 import {
   GroupObjectRect,
@@ -37,6 +39,7 @@ import {
 } from "./canvas-state";
 import {
   BookmarkCard,
+  CardProperties,
   CanvasImage,
   CANVAS_BOUND,
   CanvasTransform,
@@ -115,6 +118,7 @@ export class WebDeskView extends ItemView {
   private interactionLock = 0;
   /** 近期本地写回的坐标（path → x/y/时刻）：metadataCache 滞后窗口内以本地为准，防视觉回跳。 */
   private layoutWrites = new Map<string, RecentLayoutWrite>();
+  private cardPropertyWrites = new Map<string, { properties: CardProperties; at: number }>();
   private refreshTimer: number | null = null;
   private autoPlaceRunning = false;
 
@@ -229,9 +233,16 @@ export class WebDeskView extends ItemView {
     const now = Date.now();
     for (const card of this.cards) {
       const write = this.layoutWrites.get(card.path);
-      if (!write) continue;
-      if (applyRecentLayoutWrite(card, write, now) === "expired") {
+      if (write && applyRecentLayoutWrite(card, write, now) === "expired") {
         this.layoutWrites.delete(card.path);
+      }
+      const propertyWrite = this.cardPropertyWrites.get(card.path);
+      if (propertyWrite && now - propertyWrite.at > 10_000) {
+        this.cardPropertyWrites.delete(card.path);
+      } else if (propertyWrite) {
+        card.title = propertyWrite.properties.title;
+        card.rating = propertyWrite.properties.rating;
+        card.note = propertyWrite.properties.note;
       }
     }
 
@@ -360,6 +371,7 @@ export class WebDeskView extends ItemView {
     } else {
       this.appendLetterBlock(thumb, card);
     }
+    renderCardPropertyIndicators(thumb, card.rating, card.note);
 
     const label = el.createDiv({ cls: "web-desk-icon-label", text: card.title });
     label.style.width = `${card.size + 24}px`;
@@ -367,9 +379,13 @@ export class WebDeskView extends ItemView {
     handle.style.top = `${card.size - 4}px`;
 
     el.setAttribute("data-path", card.path);
-    el.setAttribute("aria-label", card.targetPath
-      ? `${card.title}\n${card.targetPath}`
-      : card.url ? `${card.title}\n${card.url}` : card.title);
+    el.setAttribute("aria-label", cardAccessibleLabel(
+      card.title,
+      card.targetPath || card.url,
+      card.rating,
+      card.note,
+    ));
+    if (card.note) el.setAttribute("title", card.note);
 
     el.addEventListener("pointerdown", (event) => this.onIconPointerDown(event, card, el));
     el.addEventListener("dblclick", (event) => {
@@ -859,6 +875,10 @@ export class WebDeskView extends ItemView {
             new Notice("已复制链接");
           }
         }));
+      menu.addItem((item) => item
+        .setTitle("编辑名称、评分与备注…")
+        .setIcon("square-pen")
+        .onClick(() => this.editWebCardProperties(card)));
     }
     menu.addItem((item) =>
       item
@@ -866,15 +886,15 @@ export class WebDeskView extends ItemView {
         .setIcon("move-up-right")
         .onClick(() => this.beginArrowDraft({ kind: "card", ref: card.path })),
     );
-    menu.addItem((item) =>
-      item
-        .setTitle(card.targetPath ? "为此文件添加评分" : "为此链接添加评分")
+    if (card.targetPath) {
+      menu.addItem((item) => item
+        .setTitle("为此文件添加评分")
         .setIcon("star")
         .onClick(() => this.addRating({
           x: card.x + card.size + 152,
           y: card.y + 43,
-        }, card)),
-    );
+        }, card)));
+    }
     menu.addSeparator();
 
     menu.addItem((item) =>
@@ -939,6 +959,40 @@ export class WebDeskView extends ItemView {
     card.size = size;
     await this.persistIconSize(card);
     this.render();
+  }
+
+  private editWebCardProperties(card: BookmarkCard): void {
+    new CardPropertiesModal(this.app, {
+      initial: { title: card.title, rating: card.rating, note: card.note },
+      onSubmit: (properties) => void this.persistWebCardProperties(card, properties),
+    }).open();
+  }
+
+  private async persistWebCardProperties(
+    card: BookmarkCard,
+    properties: CardProperties,
+  ): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(card.path);
+    if (!(file instanceof TFile)) {
+      new Notice("找不到这个收藏对应的 Markdown 文件");
+      return;
+    }
+    this.interactionLock += 1;
+    try {
+      await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
+        applyCardPropertiesToFrontmatter(frontmatter, properties);
+      });
+      this.cardPropertyWrites.set(card.path, { properties: { ...properties }, at: Date.now() });
+      card.title = properties.title;
+      card.rating = properties.rating;
+      card.note = properties.note;
+      this.render();
+      new Notice("网页属性已保存");
+    } catch (error) {
+      new Notice(`保存网页属性失败：${getErrorMessage(error)}`, 5000);
+    } finally {
+      this.interactionLock -= 1;
+    }
   }
 
   private async persistIconSize(card: BookmarkCard): Promise<void> {

@@ -92,6 +92,13 @@ export interface WebDeskSettings {
   defaultIconSize: number;
 }
 
+/** 网页卡片自身的内容属性；不占用画布上的独立组件。 */
+export interface CardProperties {
+  title: string;
+  rating: number;
+  note: string;
+}
+
 export const DEFAULT_SETTINGS: WebDeskSettings = {
   bookmarkFolder: "收藏夹",
   imageFolder: "附件/网页桌面",
@@ -108,6 +115,8 @@ export interface BookmarkCard {
   host: string;
   type: string;
   description: string;
+  rating: number;
+  note: string;
   x: number;
   y: number;
   size: number;
