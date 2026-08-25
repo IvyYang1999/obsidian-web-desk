@@ -32,6 +32,7 @@ import { CardPropertiesModal, TextInputModal } from "./modals";
 import { normalizeCardRating } from "./card-properties-state";
 import { cardAccessibleLabel, renderCardPropertyIndicators } from "./card-properties-ui";
 import { beginCanvasPointerSession } from "./canvas-pointer";
+import { canvasWheelIntent } from "./canvas-wheel";
 import {
   GroupObjectRect,
   objectGroupBounds,
@@ -1072,12 +1073,18 @@ export class DeskEmbed {
       }
     }, { capture: true });
 
-    // 普通滚轮留给笔记滚动；Ctrl/Cmd+滚轮缩放画布
+    // 指针位于画布内时，双指/滚轮平移，触控板捏合或 Ctrl/Cmd+滚轮缩放。
+    // 正文仍可从画布外滚动，避免依赖无法可靠识别设备类型的 wheel 猜测。
     this.rootEl.addEventListener("wheel", (event) => {
-      if (!(event.ctrlKey || event.metaKey)) return;
+      const intent = canvasWheelIntent(event, this.rootEl.clientHeight);
       event.preventDefault();
-      const factor = Math.exp(-event.deltaY * 0.0022);
-      this.zoomAt(event.clientX, event.clientY, factor);
+      if (intent.kind === "zoom") {
+        this.zoomAt(event.clientX, event.clientY, intent.factor);
+        return;
+      }
+      this.panX += intent.x;
+      this.panY += intent.y;
+      this.applyTransform();
     }, { passive: false });
 
     this.rootEl.addEventListener("keydown", (event) => {

@@ -20,6 +20,7 @@ import { normalizeRatingValue, ratingLinkState } from "./rating-state";
 import { applyCardPropertiesToFrontmatter } from "./card-properties-state";
 import { cardAccessibleLabel, renderCardPropertyIndicators } from "./card-properties-ui";
 import { beginCanvasPointerSession } from "./canvas-pointer";
+import { canvasWheelIntent } from "./canvas-wheel";
 import {
   GroupObjectRect,
   objectGroupBounds,
@@ -463,16 +464,16 @@ export class WebDeskView extends ItemView {
   // ---------- 画布级交互 ----------
 
   private onWheel(event: WheelEvent): void {
+    const intent = canvasWheelIntent(event, this.rootEl.clientHeight);
     event.preventDefault();
 
-    if (event.ctrlKey || event.metaKey) {
-      const factor = Math.exp(-event.deltaY * 0.0022);
-      this.zoomAt(event.clientX, event.clientY, factor);
+    if (intent.kind === "zoom") {
+      this.zoomAt(event.clientX, event.clientY, intent.factor);
       return;
     }
 
-    this.transform.panX -= event.deltaX;
-    this.transform.panY -= event.deltaY;
+    this.transform.panX += intent.x;
+    this.transform.panY += intent.y;
     this.applyTransform();
     this.saveTransformDebounced();
   }
