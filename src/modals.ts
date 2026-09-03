@@ -1,4 +1,4 @@
-import { App, Modal } from "obsidian";
+import { App, FuzzySuggestModal, Modal, TFile } from "obsidian";
 import { normalizeCardProperties } from "./card-properties-state";
 import type { CardProperties } from "./types";
 
@@ -194,5 +194,57 @@ export class ConfirmModal extends Modal {
 
   onClose(): void {
     this.contentEl.empty();
+  }
+}
+
+/** 使用 Obsidian 原生模糊搜索选择一个可能包含画布的 Markdown。调用方负责最终校验。 */
+export class CanvasFileSuggestModal extends FuzzySuggestModal<TFile> {
+  private readonly sourcePath: string;
+  private readonly onChoose: (file: TFile) => void;
+
+  constructor(app: App, sourcePath: string, onChoose: (file: TFile) => void) {
+    super(app);
+    this.sourcePath = sourcePath;
+    this.onChoose = onChoose;
+    this.setPlaceholder("选择含网页收藏画布的笔记…");
+  }
+
+  getItems(): TFile[] {
+    return this.app.vault.getMarkdownFiles().filter((file) => file.path !== this.sourcePath);
+  }
+
+  getItemText(file: TFile): string {
+    return file.path.replace(/\.md$/i, "");
+  }
+
+  onChooseItem(file: TFile): void {
+    this.onChoose(file);
+  }
+}
+
+/** 选择一个可在画布中以图标、卡片或嵌入阅读器展示的 Vault 文件。 */
+export class PreviewFileSuggestModal extends FuzzySuggestModal<TFile> {
+  private readonly sourcePath: string;
+  private readonly onChoose: (file: TFile) => void;
+
+  constructor(app: App, sourcePath: string, onChoose: (file: TFile) => void) {
+    super(app);
+    this.sourcePath = sourcePath;
+    this.onChoose = onChoose;
+    this.setPlaceholder("选择 Markdown 或 PDF…");
+  }
+
+  getItems(): TFile[] {
+    return this.app.vault.getFiles().filter((file) =>
+      file.path !== this.sourcePath && ["md", "pdf"].includes(file.extension.toLowerCase()),
+    );
+  }
+
+  getItemText(file: TFile): string {
+    return file.path;
+  }
+
+  onChooseItem(file: TFile): void {
+    this.onChoose(file);
   }
 }

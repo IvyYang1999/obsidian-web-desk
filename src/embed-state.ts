@@ -1,17 +1,28 @@
 import { GROUP_COLORS } from "./types";
 import type { CanvasComponents, TextBox } from "./types";
+import type { CardViewMode } from "./card-view-state";
+import { cardPlacementFrame, normalizeCardViewMode } from "./card-view-state";
+import type { CardStyle } from "./canvas-ui-state";
 
 export interface EmbedItem {
   url: string;
   /** Vault 内 Markdown 路径；存在时该条目是文件卡片，url 保持空字符串。 */
   path?: string;
+  /** 网页收藏对应的 Markdown；与 path（普通文件卡片）语义分离。 */
+  bookmarkPath?: string;
   title: string;
   description?: string;
+  previewImage?: string;
   rating?: number;
   note?: string;
+  caption?: string;
   x: number;
   y: number;
   size?: number;
+  viewMode?: CardViewMode;
+  cardStyle?: CardStyle;
+  previewWidth?: number;
+  previewHeight?: number;
   group?: string;
   objectGroup?: string;
 }
@@ -50,7 +61,7 @@ export function findAvailableEmbedItemPosition(
   desired: { x: number; y: number },
   size = 96,
 ): { x: number; y: number } {
-  return findAvailableEmbedPosition(data, desired, size, size + 42, size + 32);
+  return findAvailableEmbedPosition(data, desired, size + 24, size + 44, size + 56);
 }
 
 export function findAvailableEmbedRatingPosition(
@@ -68,12 +79,14 @@ function findAvailableEmbedPosition(
   step: number,
 ): { x: number; y: number } {
   const occupied: EmbedRect[] = [
-    ...data.items.map((item) => ({
-      x: item.x,
-      y: item.y,
-      w: item.size ?? 96,
-      h: (item.size ?? 96) + 42,
-    })),
+    ...data.items.map((item) => {
+      const frame = cardPlacementFrame({
+        ...item,
+        size: item.size ?? 96,
+        viewMode: normalizeCardViewMode(item.viewMode),
+      });
+      return { x: item.x, y: item.y, w: frame.w, h: frame.h };
+    }),
     ...(data.images ?? []).map((image) => ({ x: image.x, y: image.y, w: image.w, h: image.h })),
     ...(data.textboxes ?? []).map((box) => ({ x: box.x, y: box.y, w: box.w, h: box.h })),
     ...(data.ratings ?? []).map((rating) => ({ x: rating.x, y: rating.y, w: 208, h: 86 })),

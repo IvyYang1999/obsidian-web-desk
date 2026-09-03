@@ -2,6 +2,13 @@ import { App, TFile } from "obsidian";
 import { applyDeskPatch, DeskPatch } from "./layout-state";
 import { BookmarkCard } from "./types";
 import { normalizeCardRating } from "./card-properties-state";
+import { processFrontmatterSerially } from "./frontmatter-write";
+import {
+  DEFAULT_PREVIEW_HEIGHT,
+  DEFAULT_PREVIEW_WIDTH,
+  normalizeCardViewMode,
+} from "./card-view-state";
+import { normalizeCardStyle } from "./canvas-ui-state";
 
 /** 图标容器宽度（含留白），自动排布网格用。 */
 const GRID_STEP = 132;
@@ -14,6 +21,7 @@ export function readCard(file: TFile, app: App, defaultSize: number): BookmarkCa
 
   const cache = app.metadataCache.getFileCache(file);
   const fm = (cache?.frontmatter ?? {}) as Record<string, unknown>;
+  if (fm.desk_hidden === true) return null;
 
   const url = typeof fm.url === "string" ? fm.url : "";
   const targetPath = typeof fm.desk_file === "string" ? fm.desk_file : "";
@@ -26,6 +34,12 @@ export function readCard(file: TFile, app: App, defaultSize: number): BookmarkCa
   const size = readNumber(fm.desk_size) ?? defaultSize;
   const group = typeof fm.desk_group === "string" ? fm.desk_group : "";
   const objectGroup = typeof fm.desk_object_group === "string" ? fm.desk_object_group : "";
+  const viewMode = normalizeCardViewMode(fm.desk_view_mode);
+  const cardStyle = normalizeCardStyle(fm.desk_card_style);
+  const previewWidth = readNumber(fm.desk_preview_width) ?? DEFAULT_PREVIEW_WIDTH;
+  const previewHeight = readNumber(fm.desk_preview_height) ?? DEFAULT_PREVIEW_HEIGHT;
+  const cachedImage = cache?.embeds?.find((embed) => /^https?:\/\//i.test(embed.link))?.link ?? "";
+  const previewImage = typeof fm.preview_image === "string" ? fm.preview_image : cachedImage;
 
   let host = "";
   if (url) {
@@ -44,11 +58,17 @@ export function readCard(file: TFile, app: App, defaultSize: number): BookmarkCa
     host,
     type: typeof fm.type === "string" ? fm.type : "",
     description: typeof fm.description === "string" ? fm.description : "",
+    previewImage,
     rating: normalizeCardRating(fm.desk_rating),
     note: typeof fm.desk_note === "string" ? fm.desk_note.trim() : "",
+    caption: typeof fm.desk_caption === "string" ? fm.desk_caption.trim() : "",
     x,
     y,
     size,
+    viewMode,
+    cardStyle,
+    previewWidth,
+    previewHeight,
     group,
     objectGroup,
     placed: typeof fm.desk_x === "number" || typeof fm.desk_y === "number",
@@ -71,7 +91,7 @@ export async function writeDeskFields(
   file: TFile,
   patch: DeskPatch,
 ): Promise<void> {
-  await app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+  await processFrontmatterSerially(app, file, (fm: Record<string, unknown>) => {
     applyDeskPatch(fm, patch);
   });
 }

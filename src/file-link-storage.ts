@@ -23,18 +23,20 @@ export function markdownFilesFromDrop(
     const exact = app.vault.getAbstractFileByPath(normalizePath(vaultPath));
     const file = exact instanceof TFile
       ? exact
-      : app.metadataCache.getFirstLinkpathDest(vaultPath.replace(/\.md$/i, ""), sourcePath);
-    if (!(file instanceof TFile) || file.extension.toLowerCase() !== "md") continue;
+      : /\.md$/i.test(vaultPath)
+        ? app.metadataCache.getFirstLinkpathDest(vaultPath.replace(/\.md$/i, ""), sourcePath)
+        : null;
+    if (!(file instanceof TFile) || !["md", "pdf"].includes(file.extension.toLowerCase())) continue;
     if (!resolved.some((entry) => entry.path === file.path)) resolved.push(file);
   }
   return resolved;
 }
 
-/** Finder 拖入了本地 Markdown，但它不能解析为当前 Vault 文件时供 UI 给出明确提示。 */
+/** Finder 拖入了本地 Markdown/PDF，但它不能解析为当前 Vault 文件时供 UI 给出明确提示。 */
 export function hasLocalMarkdownFileDrop(data: DataTransfer | null): boolean {
   if (!data) return false;
   return candidatesFromDrop(data).some((candidate) =>
-    (/^(?:\/|[a-z]:[\\/])/i.test(candidate) && /\.md$/i.test(candidate))
+    (/^(?:\/|[a-z]:[\\/])/i.test(candidate) && /\.(?:md|pdf)$/i.test(candidate))
   );
 }
 

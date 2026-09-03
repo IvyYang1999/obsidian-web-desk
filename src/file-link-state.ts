@@ -5,7 +5,7 @@ export interface MarkdownDropText {
   filePaths?: string[];
 }
 
-/** 从 Obsidian/系统拖拽的多种载荷中提取候选 Markdown 路径；是否存在由调用方查 Vault。 */
+/** 从 Obsidian/系统拖拽的多种载荷中提取候选 Markdown/PDF 路径；是否存在由调用方查 Vault。 */
 export function extractMarkdownLinkCandidates(payload: MarkdownDropText): string[] {
   const candidates: string[] = [];
   const push = (value: string): void => {
@@ -31,17 +31,17 @@ export function extractMarkdownLinkCandidates(payload: MarkdownDropText): string
   for (const match of combined.matchAll(/!?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g)) {
     push(match[1]);
   }
-  for (const match of combined.matchAll(/\[[^\]]*\]\(([^)]+?\.md)(?:#[^)]*)?\)/gi)) {
+  for (const match of combined.matchAll(/\[[^\]]*\]\(([^)]+?\.(?:md|pdf))(?:#[^)]*)?\)/gi)) {
     push(match[1]);
   }
   for (const line of combined.split(/\r?\n/)) {
     const raw = line.trim();
     if (/^file:\/\//i.test(raw)) {
-      if (/\.md(?:[?#].*)?$/i.test(raw) && !/[<>\[\]()]/.test(raw)) push(raw);
+      if (/\.(?:md|pdf)(?:[?#].*)?$/i.test(raw) && !/[<>\[\]()]/.test(raw)) push(raw);
       continue;
     }
     if (/^[a-z][a-z\d+.-]*:\/\//i.test(raw)) continue;
-    if (/\.md$/i.test(raw) && !/[<>\[\]()]/.test(raw)) push(raw);
+    if (/\.(?:md|pdf)$/i.test(raw) && !/[<>\[\]()]/.test(raw)) push(raw);
   }
   for (const filePath of payload.filePaths ?? []) push(filePath);
   return candidates;
@@ -76,11 +76,15 @@ export function extractEmbeddedMarkdownPaths(markdown: string): string[] {
   const paths: string[] = [];
   for (const match of markdown.matchAll(/```web-desk[^\n]*\r?\n([\s\S]*?)\r?\n```/g)) {
     try {
-      const parsed = JSON.parse(match[1]) as { items?: Array<{ path?: unknown }> };
+      const parsed = JSON.parse(match[1]) as {
+        items?: Array<{ path?: unknown; bookmarkPath?: unknown }>;
+      };
       for (const item of parsed.items ?? []) {
-        if (typeof item.path !== "string" || !item.path.trim()) continue;
-        const path = item.path.trim();
-        if (!paths.includes(path)) paths.push(path);
+        for (const value of [item.path, item.bookmarkPath]) {
+          if (typeof value !== "string" || !value.trim()) continue;
+          const path = value.trim();
+          if (!paths.includes(path)) paths.push(path);
+        }
       }
     } catch {
       // 坏块不参与双链同步，也不改写原文。

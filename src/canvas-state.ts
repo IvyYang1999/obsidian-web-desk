@@ -15,6 +15,11 @@ export interface CanvasCardRect extends CanvasRect {
   group?: string;
 }
 
+export interface CanvasAreaMemberRect extends CanvasRect {
+  key: string;
+  group?: string;
+}
+
 export interface CanvasEndpointScene {
   cards: CanvasCardRect[];
   textboxes: TextBox[];
@@ -45,6 +50,14 @@ export function createGroupBox(options: CreateGroupBoxOptions): GroupBox {
   };
 }
 
+export function nextAvailableGroupName(names: string[], base = "新区域"): string {
+  const used = new Set(names.map((name) => name.trim()).filter(Boolean));
+  if (!used.has(base)) return base;
+  let suffix = 2;
+  while (used.has(`${base} ${suffix}`)) suffix += 1;
+  return `${base} ${suffix}`;
+}
+
 export function groupAtPoint(groups: GroupBox[], point: CanvasPoint): string {
   const group = groups.find((entry) =>
     point.x >= entry.x && point.x <= entry.x + entry.w &&
@@ -54,7 +67,7 @@ export function groupAtPoint(groups: GroupBox[], point: CanvasPoint): string {
 }
 
 export function recomputeGroupMembership(
-  cards: CanvasCardRect[],
+  cards: Array<CanvasRect & { group?: string }>,
   groups: GroupBox[],
 ): number {
   let changed = 0;
@@ -69,6 +82,17 @@ export function recomputeGroupMembership(
     }
   }
   return changed;
+}
+
+export function areaMembers<T extends CanvasRect>(
+  objects: T[],
+  groups: GroupBox[],
+  areaName: string,
+): T[] {
+  return objects.filter((object) => groupAtPoint(groups, {
+    x: object.x + object.w / 2,
+    y: object.y + object.h / 2,
+  }) === areaName);
 }
 
 export function renameGroupMembership(
@@ -131,6 +155,42 @@ export function arrowLine(
     from: r1 ? rectEdgePoint(r1, p2) : p1,
     to: r2 ? rectEdgePoint(r2, p1) : p2,
   };
+}
+
+/** 框选命中箭头的可见线段，而不是它可能很大的外接矩形。 */
+export function arrowIntersectsRect(
+  arrow: Arrow,
+  scene: CanvasEndpointScene,
+  rect: CanvasRect,
+  tolerance = 6,
+): boolean {
+  const line = arrowLine(arrow.from, arrow.to, scene);
+  if (!line) return false;
+  const left = rect.x - tolerance;
+  const top = rect.y - tolerance;
+  const right = rect.x + rect.w + tolerance;
+  const bottom = rect.y + rect.h + tolerance;
+  const inside = (point: CanvasPoint): boolean =>
+    point.x >= left && point.x <= right && point.y >= top && point.y <= bottom;
+  if (inside(line.from) || inside(line.to)) return true;
+
+  const intersects = (a: CanvasPoint, b: CanvasPoint, c: CanvasPoint, d: CanvasPoint): boolean => {
+    const cross = (p: CanvasPoint, q: CanvasPoint, r: CanvasPoint): number =>
+      (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+    const abC = cross(a, b, c);
+    const abD = cross(a, b, d);
+    const cdA = cross(c, d, a);
+    const cdB = cross(c, d, b);
+    return abC * abD <= 0 && cdA * cdB <= 0;
+  };
+  const topLeft = { x: left, y: top };
+  const topRight = { x: right, y: top };
+  const bottomRight = { x: right, y: bottom };
+  const bottomLeft = { x: left, y: bottom };
+  return intersects(line.from, line.to, topLeft, topRight) ||
+    intersects(line.from, line.to, topRight, bottomRight) ||
+    intersects(line.from, line.to, bottomRight, bottomLeft) ||
+    intersects(line.from, line.to, bottomLeft, topLeft);
 }
 
 export function pruneDanglingArrows(

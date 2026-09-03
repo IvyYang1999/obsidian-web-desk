@@ -1,7 +1,9 @@
 /* 网页桌面 · 画布 */
 .web-desk-view,
 .web-desk-embed-host,
+.web-desk-embed,
 .web-desk-card-properties,
+.web-desk-color-picker,
 .web-desk-modal-buttons {
   --wd-surface: var(--background-secondary);
   --wd-border-color: var(--background-modifier-border);
@@ -11,6 +13,7 @@
   --wd-space-1: 4px;
   --wd-space-2: 8px;
   --wd-space-3: 12px;
+  --wd-control-compact: 32px;
   --wd-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.18);
   --wd-shadow-md: 0 4px 14px rgba(0, 0, 0, 0.24);
   --wd-motion-fast: 120ms ease;
@@ -34,11 +37,29 @@
   user-select: none;
   -webkit-user-select: none;
   cursor: default;
+  container-type: inline-size;
 }
 
 .web-desk-canvas {
   position: absolute;
   transform-origin: 0 0;
+}
+
+/* 对齐参考线属于手势反馈：即时出现、即时消失，不用 transition 追赶指针。 */
+.web-desk-snap-guide {
+  position: absolute;
+  z-index: 60;
+  background: var(--interactive-accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 24%, transparent);
+  pointer-events: none;
+}
+
+.web-desk-snap-guide.is-vertical {
+  transform: translateX(-50%);
+}
+
+.web-desk-snap-guide.is-horizontal {
+  transform: translateY(-50%);
 }
 
 /* 图标 */
@@ -146,6 +167,11 @@
   box-shadow: 0 0 0 3px var(--interactive-accent-hover), var(--wd-shadow-md);
 }
 
+.web-desk-icon:focus-visible .web-desk-icon-thumb {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px var(--interactive-accent), var(--wd-shadow-md);
+}
+
 .web-desk-image.is-selected .web-desk-image-content,
 .web-desk-image.is-selected .web-desk-image-missing,
 .web-desk-rating.is-selected {
@@ -154,7 +180,8 @@
 }
 
 .web-desk-textbox.is-selected {
-  box-shadow: inset 0 0 0 2px var(--interactive-accent);
+  border-color: var(--interactive-accent);
+  box-shadow: none;
 }
 
 .web-desk-icon-img {
@@ -167,6 +194,150 @@
 .web-desk-file-thumb {
   color: var(--text-muted);
   background-color: var(--background-primary-alt);
+}
+
+/* 含 web-desk 块的 Markdown 文件卡片自动升级为“画布引用”。 */
+.web-desk-icon.is-canvas-reference .web-desk-file-thumb {
+  background:
+    radial-gradient(circle, color-mix(in srgb, var(--interactive-accent) 24%, transparent) 1px, transparent 1px),
+    var(--wd-surface);
+  background-size: 12px 12px;
+}
+
+.web-desk-canvas-reference-badge {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 2px 5px;
+  border-radius: 999px;
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+
+/* 画布下钻：只渲染当前层，面包屑保留空间关系与明确退出路径。 */
+.web-desk-drilldown {
+  position: absolute;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  grid-template-rows: 42px minmax(0, 1fr);
+  overflow: hidden;
+  color: var(--text-normal);
+  background: var(--background-primary);
+  animation: web-desk-drilldown-in 140ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* macOS 无边框窗口的顶部区域由原生标题栏接管，网页按钮放进去会可见但无法点击。 */
+body.mod-macos .web-desk-embed.is-fullscreen > .web-desk-drilldown {
+  top: 32px;
+}
+
+.web-desk-drilldown-nav {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 32px;
+  align-items: center;
+  gap: var(--wd-space-1);
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--wd-border-color);
+  background: color-mix(in srgb, var(--background-primary) 88%, transparent);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-app-region: no-drag;
+}
+
+.web-desk-drilldown-nav * {
+  -webkit-app-region: no-drag;
+}
+
+.web-desk-drilldown-back,
+.web-desk-drilldown-close,
+.web-desk-drilldown-crumb {
+  min-width: 0;
+  height: 30px;
+  margin: 0;
+  padding: 0 8px;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+.web-desk-drilldown-back,
+.web-desk-drilldown-close {
+  width: 30px;
+  padding: 0;
+}
+
+.web-desk-drilldown-back:hover,
+.web-desk-drilldown-close:hover,
+.web-desk-drilldown-crumb:hover:not(.is-current) {
+  background: var(--background-modifier-hover);
+}
+
+.web-desk-drilldown-crumbs {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.web-desk-drilldown-crumb {
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-desk-drilldown-crumb.is-current {
+  color: var(--text-normal);
+  font-weight: 600;
+  cursor: default;
+}
+
+.web-desk-drilldown-separator,
+.web-desk-drilldown-separator svg {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  color: var(--text-faint);
+}
+
+.web-desk-drilldown-content {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.web-desk-drilldown-content > .web-desk-embed-host,
+.web-desk-drilldown-content .web-desk-embed.is-drilldown-surface {
+  width: 100%;
+  height: 100% !important;
+}
+
+.web-desk-drilldown-content .web-desk-embed.is-drilldown-surface {
+  border: 0;
+  border-radius: 0;
+}
+
+.web-desk-embed.is-drilldown-surface .web-desk-fullscreen-btn,
+.web-desk-embed.is-drilldown-surface .web-desk-embed-height-resize {
+  display: none;
+}
+
+@keyframes web-desk-drilldown-in {
+  from { opacity: 0; transform: scale(0.995); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .web-desk-drilldown { animation: none; }
 }
 
 .web-desk-file-icon {
@@ -182,6 +353,384 @@
   width: 52%;
   height: 52%;
   stroke-width: 1.6;
+}
+
+.web-desk-file-badge {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  padding: 2px 5px;
+  border-radius: 999px;
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+/* 本地文件与网页共用 placement 几何，但阅读界面保持“文档”而非嵌套卡片的层级。 */
+.web-desk-file-preview-card,
+.web-desk-file-embed {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid var(--wd-border-color);
+  border-radius: inherit;
+  background: var(--background-primary);
+  box-shadow: var(--wd-shadow-sm);
+  color: var(--text-normal);
+  transition: border-color var(--wd-motion-fast), box-shadow var(--wd-motion-fast);
+}
+
+.web-desk-file-preview-card {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  pointer-events: none;
+}
+
+.web-desk-file-card-header,
+.web-desk-file-embed-header {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-bottom: 1px solid var(--wd-border-color);
+  background: color-mix(in srgb, var(--background-primary) 94%, var(--background-secondary));
+}
+
+.web-desk-file-card-header {
+  gap: var(--wd-space-2);
+  padding: 10px 12px;
+}
+
+.web-desk-file-card-icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--text-muted);
+}
+
+.web-desk-file-card-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.web-desk-file-card-heading,
+.web-desk-file-embed-identity {
+  min-width: 0;
+}
+
+.web-desk-file-card-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.web-desk-file-kind {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.web-desk-file-card-title {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  font-weight: 650;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-desk-file-card-preview,
+.web-desk-file-embed-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--background-primary);
+}
+
+.web-desk-file-preview-card .web-desk-file-markdown {
+  overflow: hidden;
+  padding: 10px 12px 18px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.web-desk-file-preview-card .web-desk-file-pdf-frame,
+.web-desk-file-pdf-frame.is-static {
+  pointer-events: none;
+}
+
+.web-desk-file-embed {
+  display: grid;
+  grid-template-rows: 38px minmax(0, 1fr);
+}
+
+.web-desk-file-embed-header {
+  justify-content: space-between;
+  gap: var(--wd-space-2);
+  padding: 0 6px 0 10px;
+}
+
+.web-desk-file-embed-identity,
+.web-desk-file-embed-actions {
+  display: flex;
+  align-items: center;
+}
+
+.web-desk-file-embed-identity {
+  gap: 6px;
+}
+
+.web-desk-file-embed-title {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-desk-file-embed-actions {
+  flex: 0 0 auto;
+  gap: 1px;
+}
+
+.web-desk-file-embed-action {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--wd-radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+}
+
+.web-desk-file-embed-action:hover,
+.web-desk-file-embed-action:focus-visible {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.web-desk-file-embed-action:active,
+.web-desk-file-fullscreen-back:active,
+.web-desk-file-fullscreen-open:active {
+  transform: scale(0.96);
+}
+
+.web-desk-file-embed-action svg {
+  width: 15px;
+  height: 15px;
+}
+
+.web-desk-file-markdown {
+  height: 100%;
+  box-sizing: border-box;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 20px 24px 36px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.web-desk-file-markdown.markdown-rendered > :first-child { margin-top: 0; }
+.web-desk-file-markdown.markdown-rendered > :last-child { margin-bottom: 0; }
+
+.web-desk-file-pdf-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: var(--background-primary-alt);
+}
+
+/* Obsidian 默认给 .pdf-embed 固定 800px；画布内必须服从对象自己的 placement。 */
+.web-desk-file-pdf-frame.pdf-embed,
+.internal-embed.web-desk-file-pdf-frame.pdf-embed:not(.image-embed) {
+  width: 100% !important;
+  height: 100% !important;
+  max-height: none !important;
+  border: 0;
+  border-radius: 0;
+}
+
+.web-desk-file-pdf-frame > .internal-embed,
+.web-desk-file-pdf-frame > .media-embed,
+.web-desk-file-pdf-frame .pdf-embed,
+.web-desk-file-pdf-frame .pdf-container,
+.web-desk-file-pdf-frame .pdf-content-container,
+.web-desk-file-pdf-frame iframe {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.web-desk-file-pdf-frame.is-static .pdf-toolbar { display: none; }
+.web-desk-file-pdf-frame.is-static .pdf-container { top: 0 !important; }
+
+.web-desk-file-error {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  padding: var(--wd-space-3);
+  box-sizing: border-box;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  text-align: center;
+}
+
+.web-desk-icon.is-preview:hover .web-desk-file-preview-card,
+.web-desk-icon.is-preview:focus-visible .web-desk-file-preview-card,
+.web-desk-icon.is-preview.is-selected .web-desk-file-preview-card,
+.web-desk-icon.is-embed:hover .web-desk-file-embed,
+.web-desk-icon.is-embed:focus-visible .web-desk-file-embed,
+.web-desk-icon.is-embed.is-selected .web-desk-file-embed {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px var(--interactive-accent-hover), var(--wd-shadow-md);
+}
+
+/* 全屏阅读器直接挂到 body；在此自带 token，避免依赖画布 DOM 祖先。 */
+.web-desk-file-fullscreen {
+  --wd-border-color: var(--background-modifier-border);
+  --wd-radius-sm: 6px;
+  --wd-space-1: 4px;
+  --wd-space-2: 8px;
+  --wd-space-3: 12px;
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: grid;
+  grid-template-rows: 48px minmax(0, 1fr);
+  overflow: hidden;
+  color: var(--text-normal);
+  background: var(--background-primary);
+  outline: none;
+}
+
+body.mod-macos .web-desk-file-fullscreen {
+  padding-top: 30px;
+}
+
+.web-desk-file-fullscreen-toolbar {
+  display: grid;
+  grid-template-columns: minmax(112px, 1fr) minmax(0, auto) minmax(112px, 1fr);
+  align-items: center;
+  gap: var(--wd-space-2);
+  padding: 0 var(--wd-space-3);
+  border-bottom: 1px solid var(--wd-border-color);
+  background: color-mix(in srgb, var(--background-primary) 92%, transparent);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-app-region: no-drag;
+}
+
+.web-desk-file-fullscreen-toolbar * { -webkit-app-region: no-drag; }
+
+.web-desk-file-fullscreen-back,
+.web-desk-file-fullscreen-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  height: 32px;
+  min-height: 0;
+  margin: 0;
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--wd-radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  transition: color 120ms ease, background-color 120ms ease, transform 120ms ease;
+}
+
+.web-desk-file-fullscreen-back:hover,
+.web-desk-file-fullscreen-back:focus-visible,
+.web-desk-file-fullscreen-open:hover,
+.web-desk-file-fullscreen-open:focus-visible {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.web-desk-file-fullscreen-open { justify-self: end; }
+
+.web-desk-file-action-icon,
+.web-desk-file-action-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.web-desk-file-fullscreen-identity {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  min-width: 0;
+  gap: var(--wd-space-2);
+}
+
+.web-desk-file-fullscreen-title {
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-desk-file-fullscreen-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--background-primary);
+}
+
+.web-desk-file-fullscreen-content > .web-desk-file-markdown {
+  width: min(100%, 920px);
+  margin: 0 auto;
+  padding: 44px clamp(24px, 6vw, 72px) 96px;
+}
+
+@media (max-width: 520px) {
+  .web-desk-file-fullscreen-toolbar {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    padding: 0 6px;
+  }
+  .web-desk-file-fullscreen-back span:last-child,
+  .web-desk-file-fullscreen-open span:last-child,
+  .web-desk-file-fullscreen-identity .web-desk-file-kind {
+    display: none;
+  }
+  .web-desk-file-fullscreen-content > .web-desk-file-markdown {
+    padding: 28px 20px 72px;
+  }
 }
 
 .web-desk-icon.is-file-missing .web-desk-file-thumb {
@@ -215,15 +764,413 @@
   pointer-events: none;
 }
 
-/* 分组框 */
+/* 网页预览是同一网页对象的另一种 placement 外观，不创建第二份内容实体。 */
+.web-desk-icon.is-card-surface {
+  display: block;
+  box-sizing: border-box;
+  padding: 0;
+  border-radius: var(--wd-radius-lg);
+}
+
+.web-desk-preview-card {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(76px, 46%) minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid var(--wd-border-color);
+  border-radius: inherit;
+  background: var(--background-primary);
+  box-shadow: var(--wd-shadow-sm);
+  color: var(--text-normal);
+  transition: border-color var(--wd-motion-fast), box-shadow var(--wd-motion-fast);
+  pointer-events: none;
+}
+
+.web-desk-preview-media {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+  background: var(--background-primary-alt);
+  border-bottom: 1px solid var(--wd-border-color);
+}
+
+.web-desk-preview-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.web-desk-preview-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: color-mix(in srgb, var(--background-secondary) 82%, var(--interactive-accent) 18%);
+}
+
+.web-desk-preview-favicon {
+  width: min(72px, 30%);
+  aspect-ratio: 1;
+  object-fit: contain;
+  filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.18));
+}
+
+.web-desk-preview-fallback .web-desk-icon-letter {
+  width: 72px;
+  height: 72px;
+  max-width: 30%;
+  max-height: 70%;
+  aspect-ratio: 1;
+  border-radius: var(--wd-radius-md);
+}
+
+.web-desk-preview-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--wd-space-3);
+}
+
+.web-desk-preview-host {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-desk-preview-title {
+  display: -webkit-box;
+  margin: var(--wd-space-1) 0 0;
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: var(--font-ui-medium);
+  font-weight: 650;
+  line-height: 1.25;
+  text-wrap: balance;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.web-desk-preview-description {
+  display: -webkit-box;
+  margin: var(--wd-space-2) 0 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.web-desk-icon.is-preview:hover .web-desk-preview-card,
+.web-desk-icon.is-preview:focus-visible .web-desk-preview-card,
+.web-desk-icon.is-preview.is-selected .web-desk-preview-card {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px var(--interactive-accent-hover), var(--wd-shadow-md);
+}
+
+/* 实时网页是同一 URL 对象的第三种外观；默认由交互盾保护画布拖拽。 */
+.web-desk-embed-card {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 36px;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid var(--wd-border-color);
+  border-radius: inherit;
+  background: var(--background-primary);
+  box-shadow: var(--wd-shadow-sm);
+  transition: border-color var(--wd-motion-fast), box-shadow var(--wd-motion-fast);
+}
+
+.web-desk-embed-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--background-primary-alt);
+  pointer-events: none;
+}
+
+.web-desk-embed-card.is-live .web-desk-embed-frame {
+  pointer-events: auto;
+}
+
+.web-desk-embed-shield {
+  position: absolute;
+  inset: 0 0 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  pointer-events: auto;
+}
+
+.web-desk-embed-card.is-live .web-desk-embed-shield {
+  display: none;
+}
+
+.web-desk-embed-enter {
+  min-height: 36px;
+  padding: 0 var(--wd-space-3);
+  border: 1px solid var(--wd-border-color);
+  border-radius: var(--wd-radius-md);
+  background: color-mix(in srgb, var(--background-primary) 92%, transparent);
+  box-shadow: var(--wd-shadow-sm);
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  font-weight: 550;
+  opacity: 0;
+  transform: translateY(3px);
+  transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1), transform 140ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.web-desk-embed-shield:hover .web-desk-embed-enter,
+.web-desk-icon.is-selected .web-desk-embed-enter,
+.web-desk-embed-enter:focus-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.web-desk-embed-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  gap: var(--wd-space-2);
+  padding: 0 var(--wd-space-2) 0 var(--wd-space-3);
+  border-top: 1px solid var(--wd-border-color);
+  background: var(--background-primary);
+}
+
+.web-desk-embed-domain {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-desk-embed-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--wd-space-1);
+  flex: none;
+}
+
+.web-desk-embed-action {
+  min-height: 28px;
+  padding: 0 var(--wd-space-2);
+  border: 0;
+  border-radius: var(--wd-radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.web-desk-embed-action:hover,
+.web-desk-embed-action:focus-visible {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.web-desk-embed-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.web-desk-icon.is-embed:hover .web-desk-embed-card,
+.web-desk-icon.is-embed:focus-visible .web-desk-embed-card,
+.web-desk-icon.is-embed.is-selected .web-desk-embed-card {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px var(--interactive-accent-hover), var(--wd-shadow-md);
+}
+
+/* Caption 是网页对象的公开说明，位于展示面下方但不侵占对象几何。 */
+.web-desk-card-caption {
+  display: block;
+  width: 100%;
+  min-height: 24px;
+  max-height: 88px;
+  box-sizing: border-box;
+  margin: var(--wd-space-1) 0 0;
+  padding: 2px var(--wd-space-2);
+  overflow: hidden;
+  resize: none;
+  border: 0;
+  border-radius: var(--wd-radius-sm);
+  outline: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--font-ui-smaller);
+  line-height: 1.35;
+  text-align: center;
+  text-wrap: pretty;
+}
+
+.web-desk-card-caption:hover,
+.web-desk-card-caption:focus,
+.web-desk-card-caption.is-editing {
+  background: color-mix(in srgb, var(--background-modifier-hover) 72%, transparent);
+  color: var(--text-normal);
+}
+
+.web-desk-card-caption::placeholder {
+  color: var(--text-faint);
+}
+
+/* 单选网页的对象级工具栏：屏幕尺寸恒定，不随画布缩放。 */
+.web-desk-selection-toolbar {
+  position: absolute;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 0;
+  padding: 3px;
+  border: 1px solid var(--wd-border-color);
+  border-radius: var(--wd-radius-md);
+  background: color-mix(in srgb, var(--background-primary) 96%, transparent);
+  box-shadow: var(--wd-shadow-md);
+  transform-origin: center bottom;
+  animation: web-desk-toolbar-in 140ms cubic-bezier(0.23, 1, 0.32, 1);
+  max-width: calc(100% - 16px);
+  box-sizing: border-box;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.web-desk-selection-toolbar.is-below {
+  transform-origin: center top;
+}
+
+.web-desk-selection-toolbar.is-compact .web-desk-selection-identity-label,
+.web-desk-selection-toolbar.is-compact .web-desk-selection-tool-label {
+  display: none;
+}
+
+.web-desk-selection-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: var(--wd-control-compact);
+  height: var(--wd-control-compact);
+  padding: 0 7px;
+  border: 0;
+  border-radius: var(--wd-radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: 550;
+}
+
+.web-desk-selection-tool:hover,
+.web-desk-selection-tool:focus-visible {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.web-desk-selection-tool:active {
+  transform: scale(0.97);
+}
+
+.web-desk-selection-tool:focus-visible,
+.web-desk-create-tool:focus-visible,
+.web-desk-tool-btn:focus-visible,
+.web-desk-drilldown-back:focus-visible,
+.web-desk-drilldown-close:focus-visible,
+.web-desk-drilldown-crumb:focus-visible,
+.web-desk-file-fullscreen-back:focus-visible,
+.web-desk-file-fullscreen-open:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
+}
+
+.web-desk-tool-btn:active,
+.web-desk-drilldown-back:active,
+.web-desk-drilldown-close:active,
+.web-desk-drilldown-crumb:not(.is-current):active {
+  transform: scale(0.97);
+}
+
+.web-desk-selection-tool-icon,
+.web-desk-selection-tool-icon svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.web-desk-selection-tool-label {
+  white-space: nowrap;
+}
+
+@keyframes web-desk-toolbar-in {
+  from { opacity: 0; transform: translateY(3px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .web-desk-selection-toolbar { animation: none; }
+  .web-desk-embed-enter { transition: opacity 120ms linear; transform: none; }
+}
+
+.web-desk-icon:focus-visible {
+  outline: none;
+}
+
+/* 空间区域（旧类名保留以兼容现有画布数据与样式） */
 .web-desk-group {
   position: absolute;
-  border: 2px dashed;
+  border: 2px dashed transparent;
   border-radius: var(--wd-radius-lg);
-  /* 分组底板接管空白区拖动；网页、图片等组件靠各自 z-index 保持独立操作。 */
+  background: transparent;
+  /* 区域底板接管空白区拖动；网页、图片等组件靠各自 z-index 保持独立操作。 */
   z-index: auto;
   cursor: grab;
   pointer-events: auto;
+  transition: border-color var(--wd-motion-fast), background-color var(--wd-motion-fast);
+}
+
+.web-desk-group.has-border {
+  border-color: var(--wd-container-color);
+}
+
+.web-desk-group.has-fill {
+  background-color: color-mix(in srgb, var(--wd-container-color) 7%, transparent);
+}
+
+.web-desk-group:not(.has-border):hover,
+.web-desk-group:not(.has-border):focus-within {
+  border-color: color-mix(in srgb, var(--text-faint) 52%, transparent);
+}
+
+.web-desk-group.is-drop-target {
+  border-color: var(--interactive-accent);
+  background-color: color-mix(in srgb, var(--interactive-accent) 9%, transparent);
+}
+
+.web-desk-group.is-drop-target > .web-desk-group-header {
+  color: var(--interactive-accent);
 }
 
 .web-desk-group:active {
@@ -234,7 +1181,8 @@
   position: absolute;
   top: -14px;
   left: 14px;
-  font-weight: 600;
+  color: var(--text-muted);
+  font-weight: 550;
   cursor: grab;
   background-color: var(--background-primary);
   border-radius: var(--wd-radius-sm);
@@ -243,8 +1191,26 @@
   z-index: 12;
 }
 
+.web-desk-group.has-border .web-desk-group-header,
+.web-desk-group.has-fill .web-desk-group-header {
+  color: color-mix(in srgb, var(--wd-container-color) 55%, var(--text-normal));
+}
+
 .web-desk-group-header:active {
   cursor: grabbing;
+}
+
+.web-desk-group-header.is-editing {
+  min-width: 72px;
+  color: var(--text-normal);
+  cursor: text;
+  outline: none;
+  box-shadow: 0 2px 0 var(--interactive-accent);
+  user-select: text;
+}
+
+.web-desk-group-header.is-editing:active {
+  cursor: text;
 }
 
 .web-desk-group-resize,
@@ -261,6 +1227,23 @@
   border-color: inherit;
   border-bottom-right-radius: var(--wd-radius-sm);
   cursor: nwse-resize;
+  opacity: 0;
+  transition: opacity var(--wd-motion-fast);
+}
+
+.web-desk-group-resize::before,
+.web-desk-textbox-resize::before,
+.web-desk-image-resize::before,
+.web-desk-icon-resize::before,
+.web-desk-object-selection-resize::before {
+  content: "";
+  position: absolute;
+  inset: -7px;
+}
+
+.web-desk-group:not(.has-border) > .web-desk-group-resize,
+.web-desk-textbox:not(.has-border) > .web-desk-textbox-resize {
+  border-color: var(--interactive-accent);
 }
 
 .web-desk-group-resize {
@@ -277,14 +1260,21 @@
   right: 2px;
   bottom: auto;
   border-color: var(--interactive-accent);
-  opacity: 0;
   z-index: 2;
-  transition: opacity var(--wd-motion-fast);
 }
 
-.web-desk-icon:hover .web-desk-icon-resize,
-.web-desk-icon.is-selected .web-desk-icon-resize,
-.web-desk-icon:focus-within .web-desk-icon-resize {
+.web-desk-group:hover > .web-desk-group-resize,
+.web-desk-group:focus-within > .web-desk-group-resize,
+.web-desk-textbox:hover > .web-desk-textbox-resize,
+.web-desk-textbox:focus-within > .web-desk-textbox-resize,
+.web-desk-image:hover > .web-desk-image-resize,
+.web-desk-image:focus-within > .web-desk-image-resize,
+.web-desk-icon:hover > .web-desk-icon-resize,
+.web-desk-icon:focus-within > .web-desk-icon-resize,
+.web-desk-group-resize.is-resizing,
+.web-desk-textbox-resize.is-resizing,
+.web-desk-image-resize.is-resizing,
+.web-desk-icon-resize.is-resizing {
   opacity: 1;
 }
 
@@ -331,6 +1321,25 @@
   box-shadow: 0 0 0 1px var(--interactive-accent);
   cursor: nwse-resize;
   pointer-events: auto;
+  opacity: 0;
+  transition: opacity var(--wd-motion-fast);
+}
+
+.web-desk-root:has(
+  .web-desk-icon.is-selected:hover,
+  .web-desk-image.is-selected:hover,
+  .web-desk-textbox.is-selected:hover,
+  .web-desk-rating.is-selected:hover
+) .web-desk-object-selection-resize,
+.web-desk-root:has(
+  .web-desk-icon.is-selected:focus-within,
+  .web-desk-image.is-selected:focus-within,
+  .web-desk-textbox.is-selected:focus-within,
+  .web-desk-rating.is-selected:focus-within
+) .web-desk-object-selection-resize,
+.web-desk-object-selection-resize:hover,
+.web-desk-object-selection-resize.is-resizing {
+  opacity: 1;
 }
 
 /* 工具条 */
@@ -340,23 +1349,28 @@
   bottom: 14px;
   display: flex;
   align-items: center;
-  gap: var(--wd-space-1);
+  gap: 2px;
   background-color: var(--wd-surface);
   border: 1px solid var(--wd-border-color);
   border-radius: var(--wd-radius-md);
-  padding: var(--wd-space-1) var(--wd-space-2);
+  padding: 3px 4px;
   z-index: 30;
   box-shadow: var(--wd-shadow-sm);
 }
 
 .web-desk-tool-btn {
+  display: inline-grid;
+  place-items: center;
+  min-width: var(--wd-control-compact);
+  height: var(--wd-control-compact);
   background: none;
   border: none;
   box-shadow: none;
   color: var(--text-muted);
   cursor: pointer;
-  padding: 2px 6px;
-  font-size: var(--font-ui-small);
+  padding: 0 6px;
+  border-radius: var(--wd-radius-sm);
+  font-size: var(--font-ui-smaller);
 }
 
 .web-desk-tool-btn:hover {
@@ -457,6 +1471,130 @@
   margin-left: var(--wd-space-2);
 }
 
+/* 分组与文本框共享的颜色选择器：预设负责一致性，自定义色保持用户自由度。 */
+.web-desk-color-picker {
+  width: min(360px, calc(100vw - 48px));
+}
+
+.web-desk-color-picker-description {
+  margin: -4px 0 16px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  line-height: 1.45;
+}
+
+.web-desk-color-presets {
+  display: grid;
+  grid-template-columns: repeat(7, 40px);
+  gap: var(--wd-space-2);
+  margin-bottom: 20px;
+}
+
+.web-desk-color-swatch {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin: 0;
+  padding: 4px;
+  border: 0;
+  border-radius: 999px;
+  outline: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.web-desk-color-swatch-fill {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid color-mix(in srgb, var(--wd-swatch-color) 70%, var(--text-normal));
+  border-radius: 999px;
+  color: white;
+  background: var(--wd-swatch-color);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  transition: transform var(--wd-motion-fast), box-shadow var(--wd-motion-fast);
+}
+
+.web-desk-color-swatch-fill svg {
+  width: 15px;
+  height: 15px;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.55));
+}
+
+.web-desk-color-swatch:hover .web-desk-color-swatch-fill {
+  transform: scale(1.08);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22), var(--wd-shadow-sm);
+}
+
+.web-desk-color-swatch:focus-visible,
+.web-desk-color-swatch.is-selected {
+  box-shadow: 0 0 0 2px var(--background-primary), 0 0 0 4px var(--interactive-accent);
+}
+
+.web-desk-color-swatch:active .web-desk-color-swatch-fill {
+  transform: scale(0.94);
+}
+
+.web-desk-custom-color {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wd-space-2);
+  padding-top: 16px;
+  border-top: 1px solid var(--wd-border-color);
+}
+
+.web-desk-custom-color > label {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-weight: 600;
+}
+
+.web-desk-custom-color-controls {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: var(--wd-space-2);
+}
+
+.web-desk-custom-color-native {
+  width: 44px;
+  height: var(--input-height);
+  min-height: 36px;
+  padding: 3px;
+  overflow: hidden;
+  border: 1px solid var(--wd-border-color);
+  border-radius: var(--wd-radius-sm);
+  background: var(--background-primary);
+  cursor: pointer;
+}
+
+.web-desk-custom-color-native::-webkit-color-swatch-wrapper { padding: 0; }
+.web-desk-custom-color-native::-webkit-color-swatch {
+  border: 0;
+  border-radius: 4px;
+}
+
+.web-desk-custom-color-hex {
+  width: 100%;
+  font-family: var(--font-monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.web-desk-custom-color-hex.is-invalid {
+  border-color: var(--text-error);
+}
+
+.web-desk-custom-color-error {
+  min-height: 18px;
+  color: var(--text-error);
+  font-size: var(--font-ui-smaller);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .web-desk-color-swatch-fill { transition: none; }
+}
+
 /* 笔记内嵌画布 */
 .web-desk-embed-host,
 .markdown-rendered pre:has(.web-desk-embed-host),
@@ -486,6 +1624,60 @@
   -webkit-user-select: none;
   outline: none;
   isolation: isolate;
+  container-type: inline-size;
+}
+
+.web-desk-embed.is-fullscreen {
+  position: fixed !important;
+  inset: 0;
+  width: 100vw;
+  height: 100vh !important;
+  max-width: none;
+  max-height: none;
+  overflow: clip;
+  border: 0;
+  border-radius: 0;
+  background-color: var(--background-primary);
+  z-index: 1000;
+  animation: web-desk-fullscreen-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Obsidian 的 DOM Menu 始终挂在 body（即使设置 parent），默认 z-index 65；
+   仅在网页桌面全屏/下钻层持有活动菜单时抬升，避免菜单被画布挡住。 */
+body:has(.web-desk-embed.is-fullscreen.has-active-menu) > .menu,
+body:has(.web-desk-drilldown .has-active-menu) > .menu {
+  z-index: 1200;
+}
+
+/* 全屏画布和原位下钻仍应允许 Obsidian Modal 成为最上层交互空间。 */
+body:has(.web-desk-embed.is-fullscreen) > .modal-container,
+body:has(.web-desk-drilldown) > .modal-container {
+  z-index: 1300;
+}
+
+.web-desk-fullscreen-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--wd-space-1);
+}
+
+.web-desk-fullscreen-icon,
+.web-desk-fullscreen-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.web-desk-embed.is-fullscreen .web-desk-embed-height-resize {
+  display: none;
+}
+
+@keyframes web-desk-fullscreen-in {
+  from { opacity: 0.92; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .web-desk-embed.is-fullscreen { animation: none; }
 }
 
 .web-desk-embed-height-resize {
@@ -549,9 +1741,24 @@
 /* 主画布：文本框（缺 position:absolute 会让拖拽改 left/top 无视觉效果——V2 教训） */
 .web-desk-textbox {
   position: absolute;
-  border: 2px dashed;
+  border: 2px dashed transparent;
   border-radius: var(--wd-radius-md);
+  background: transparent;
   z-index: 6;
+  transition: border-color var(--wd-motion-fast), background-color var(--wd-motion-fast);
+}
+
+.web-desk-textbox.has-border {
+  border-color: var(--wd-container-color);
+}
+
+.web-desk-textbox.has-fill {
+  background-color: color-mix(in srgb, var(--wd-container-color) 8%, transparent);
+}
+
+.web-desk-textbox:not(.has-border):hover,
+.web-desk-textbox:not(.has-border):focus-within {
+  border-color: color-mix(in srgb, var(--text-faint) 52%, transparent);
 }
 
 .web-desk-textbox-text {
@@ -566,7 +1773,7 @@
 }
 
 .web-desk-textbox-text.is-editing {
-  outline: 1px solid var(--interactive-accent);
+  outline: 0;
   cursor: text;
   user-select: text;
   -webkit-user-select: text;
@@ -595,6 +1802,11 @@
 .web-desk-rating:hover {
   border-color: var(--interactive-accent);
   box-shadow: var(--wd-shadow-md);
+}
+
+.web-desk-rating:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
 }
 
 .web-desk-rating.is-missing {
@@ -667,7 +1879,12 @@
 
 @media (prefers-reduced-motion: reduce) {
   .web-desk-rating-star,
-  .web-desk-icon-resize {
+  .web-desk-group-resize,
+  .web-desk-textbox-resize,
+  .web-desk-image-resize,
+  .web-desk-icon-resize,
+  .web-desk-object-selection-resize,
+  .web-desk-preview-card {
     transition: none;
   }
 }
@@ -748,4 +1965,254 @@
   stroke: var(--background-primary);
   stroke-width: 3px;
   pointer-events: none;
+}
+
+/* 统一对象交互与网页卡片模板（V3） */
+.web-desk-preview-card.is-visual {
+  display: grid;
+  grid-template: 1fr / 1fr;
+}
+
+.web-desk-preview-card.is-visual > .web-desk-preview-media,
+.web-desk-preview-card.is-visual > .web-desk-preview-body {
+  grid-area: 1 / 1;
+}
+
+.web-desk-preview-card.is-visual .web-desk-preview-media { border: 0; }
+
+.web-desk-preview-card.is-visual .web-desk-preview-body {
+  align-self: end;
+  justify-content: flex-end;
+  min-height: 48%;
+  padding: 20px 16px 14px;
+  background: linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.82));
+}
+
+.web-desk-preview-card.is-visual .web-desk-preview-host,
+.web-desk-preview-card.is-visual .web-desk-preview-title {
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.web-desk-preview-card.is-compact {
+  grid-template: 1fr / minmax(88px, 34%) minmax(0, 1fr);
+}
+
+.web-desk-preview-card.is-compact .web-desk-preview-media {
+  border-right: 1px solid var(--wd-border-color);
+  border-bottom: 0;
+}
+
+.web-desk-preview-card.is-compact .web-desk-preview-body { justify-content: center; }
+.web-desk-preview-card.is-compact .web-desk-preview-description { -webkit-line-clamp: 2; }
+
+.web-desk-selection-identity {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: var(--wd-control-compact);
+  padding: 0 8px 0 6px;
+  border-right: 1px solid var(--wd-border-color);
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.web-desk-selection-tool.has-separator {
+  margin-left: 1px;
+  border-left: 1px solid var(--wd-border-color);
+  border-radius: 0 var(--wd-radius-sm) var(--wd-radius-sm) 0;
+}
+
+.web-desk-create-rail {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 3px;
+  transform: translateY(-50%);
+  border: 1px solid var(--wd-border-color);
+  border-radius: var(--wd-radius-md);
+  background: color-mix(in srgb, var(--background-primary) 96%, transparent);
+  box-shadow: var(--wd-shadow-sm);
+}
+
+.web-desk-create-tool {
+  display: grid;
+  place-items: center;
+  width: var(--wd-control-compact);
+  height: var(--wd-control-compact);
+  padding: 0;
+  border: 0;
+  border-radius: var(--wd-radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+}
+
+.web-desk-create-tool svg {
+  width: 16px;
+  height: 16px;
+}
+
+.web-desk-create-tool:hover,
+.web-desk-create-tool:focus-visible {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.web-desk-create-tool:active { transform: scale(0.96); }
+
+.web-desk-group.is-selected {
+  border-color: var(--interactive-accent);
+  box-shadow: none;
+}
+
+.web-desk-hint-action {
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: var(--wd-radius-sm);
+  pointer-events: auto;
+}
+
+.web-desk-pending-card {
+  position: absolute;
+  z-index: 18;
+  width: 288px;
+  min-height: 154px;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid var(--wd-border-color);
+  border-radius: var(--wd-radius-lg);
+  background: var(--background-primary);
+  box-shadow: var(--wd-shadow-sm);
+}
+
+.web-desk-pending-visual {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 18px;
+}
+
+.web-desk-pending-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: var(--interactive-accent);
+}
+
+.web-desk-pending-card.is-loading .web-desk-pending-icon {
+  animation: web-desk-pending-spin 900ms linear infinite;
+}
+
+.web-desk-pending-card.is-error .web-desk-pending-icon { color: var(--text-error); }
+
+.web-desk-pending-title {
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  font-weight: 650;
+}
+
+.web-desk-pending-url,
+.web-desk-pending-message {
+  width: 100%;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-desk-pending-actions { display: flex; gap: 8px; }
+
+@keyframes web-desk-pending-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 520px) {
+  .web-desk-create-rail {
+    top: auto;
+    bottom: 14px;
+    flex-direction: row;
+    transform: none;
+  }
+  .web-desk-toolbar { bottom: 66px; }
+  .web-desk-selection-identity-label { display: none; }
+  .web-desk-selection-tool-label { display: none; }
+}
+
+@container (max-width: 520px) {
+  .web-desk-create-rail {
+    top: auto;
+    bottom: 14px;
+    flex-direction: row;
+    transform: none;
+  }
+
+  .web-desk-toolbar { bottom: 66px; }
+  .web-desk-selection-identity-label,
+  .web-desk-selection-tool-label { display: none; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .web-desk-selection-toolbar,
+  .web-desk-drilldown-nav,
+  .web-desk-file-fullscreen-toolbar,
+  .web-desk-card-rating-badge,
+  .web-desk-card-note-badge {
+    background: var(--background-primary);
+    backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .web-desk-selection-toolbar,
+  .web-desk-create-rail,
+  .web-desk-toolbar,
+  .web-desk-drilldown-nav,
+  .web-desk-file-fullscreen-toolbar {
+    border-color: var(--text-muted);
+    background: var(--background-primary);
+    box-shadow: none;
+  }
+
+  .web-desk-icon.is-selected .web-desk-icon-thumb,
+  .web-desk-image.is-selected .web-desk-image-content,
+  .web-desk-image.is-selected .web-desk-image-missing,
+  .web-desk-rating.is-selected,
+  .web-desk-group.is-selected,
+  .web-desk-textbox.is-selected {
+    outline: 2px solid var(--interactive-accent);
+    outline-offset: 2px;
+  }
+}
+
+@media (forced-colors: active) {
+  .web-desk-selection-toolbar,
+  .web-desk-create-rail,
+  .web-desk-toolbar,
+  .web-desk-drilldown-nav,
+  .web-desk-file-fullscreen-toolbar,
+  .web-desk-icon-thumb,
+  .web-desk-file-preview-card,
+  .web-desk-file-embed {
+    border: 1px solid CanvasText;
+    background: Canvas;
+    box-shadow: none;
+  }
+
+  .web-desk-snap-guide,
+  .web-desk-object-selection-resize {
+    background: Highlight;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .web-desk-pending-card.is-loading .web-desk-pending-icon { animation: none; }
 }

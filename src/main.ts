@@ -77,6 +77,10 @@ export default class WebDeskPlugin extends Plugin {
         this.viewTransform = transform;
         this.saveDataDebounced();
       },
+      setBlockedEmbedHosts: (hosts) => {
+        this.settings.blockedEmbedHosts = hosts;
+        this.saveDataDebounced();
+      },
     };
     this.registerView(VIEW_TYPE_WEB_DESK, (leaf) => new WebDeskView(leaf, host));
 
@@ -132,7 +136,9 @@ export default class WebDeskPlugin extends Plugin {
     // 笔记内嵌画布：```web-desk 代码块（数据存块内，编辑写回，oneday 同款姿势）
     this.registerMarkdownCodeBlockProcessor("web-desk", (source, el, ctx) => {
       try {
-        new DeskEmbed(el, source, this.app, ctx, this.settings).render();
+        const embed = new DeskEmbed(el, source, this.app, ctx, this.settings, () => void this.saveSettings());
+        ctx.addChild(embed);
+        embed.render();
       } catch (error) {
         el.createEl("pre", { text: `web-desk 画布渲染失败：${getErrorMessage(error)}` });
       }
@@ -148,6 +154,9 @@ export default class WebDeskPlugin extends Plugin {
   private async loadDataInto(): Promise<void> {
     const data = (await this.loadData()) as WebDeskPluginData | null;
     this.settings = { ...DEFAULT_SETTINGS, ...(data?.settings ?? {}) };
+    this.settings.blockedEmbedHosts = Array.isArray(data?.settings?.blockedEmbedHosts)
+      ? data!.settings!.blockedEmbedHosts!.filter((entry): entry is string => typeof entry === "string")
+      : [];
     this.groups = Array.isArray(data?.groups) ? data!.groups! : [];
     this.textBoxes = Array.isArray(data?.textboxes) ? data!.textboxes! : [];
     this.arrows = Array.isArray(data?.arrows) ? data!.arrows! : [];

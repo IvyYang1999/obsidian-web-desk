@@ -24,21 +24,21 @@ export function objectGroupBounds(objects: GroupObjectRect[]): GroupBounds | nul
   const right = Math.max(...objects.map((object) => object.x + object.w));
   const bottom = Math.max(...objects.map((object) => object.y + object.h));
   return {
-    x: Math.round(left),
-    y: Math.round(top),
-    w: Math.round(right - left),
-    h: Math.round(bottom - top),
+    x: left,
+    y: top,
+    w: right - left,
+    h: bottom - top,
   };
 }
 
-export function translateObjectGroup(
-  objects: GroupObjectRect[],
+export function translateObjectGroup<T extends GroupObjectRect>(
+  objects: T[],
   delta: { x: number; y: number },
-): GroupObjectRect[] {
+): T[] {
   return objects.map((object) => ({
     ...object,
-    x: Math.round(object.x + delta.x),
-    y: Math.round(object.y + delta.y),
+    x: object.x + delta.x,
+    y: object.y + delta.y,
   }));
 }
 
@@ -62,10 +62,10 @@ export function scaleObjectGroup(
     scale,
     objects: objects.map((object) => ({
       ...object,
-      x: Math.round(bounds.x + (object.x - bounds.x) * scale),
-      y: Math.round(bounds.y + (object.y - bounds.y) * scale),
-      w: Math.round(object.w * scale),
-      h: Math.round(object.h * scale),
+      x: bounds.x + (object.x - bounds.x) * scale,
+      y: bounds.y + (object.y - bounds.y) * scale,
+      w: object.w * scale,
+      h: object.h * scale,
     })),
   };
 }

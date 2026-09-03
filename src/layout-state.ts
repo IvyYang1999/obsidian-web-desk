@@ -4,6 +4,11 @@ export interface DeskPatch {
   size?: number | null;
   group?: string | null;
   objectGroup?: string | null;
+  viewMode?: string | null;
+  cardStyle?: string | null;
+  previewWidth?: number | null;
+  previewHeight?: number | null;
+  hidden?: boolean | null;
 }
 
 export interface RecentLayoutWrite {
@@ -11,7 +16,12 @@ export interface RecentLayoutWrite {
   y: number;
   size?: number;
   at: number;
+  group?: string;
   objectGroup?: string;
+  viewMode?: "icon" | "preview" | "embed";
+  cardStyle?: "visual" | "article" | "compact";
+  previewWidth?: number;
+  previewHeight?: number;
 }
 
 interface LayoutCardState {
@@ -19,7 +29,12 @@ interface LayoutCardState {
   y: number;
   size: number;
   placed: boolean;
+  group?: string;
   objectGroup?: string;
+  viewMode?: "icon" | "preview" | "embed";
+  cardStyle?: "visual" | "article" | "compact";
+  previewWidth?: number;
+  previewHeight?: number;
 }
 
 type RecentLayoutResult = "applied" | "expired";
@@ -34,6 +49,11 @@ export function applyDeskPatch(fm: Record<string, unknown>, patch: DeskPatch): v
   if (patch.size !== undefined) assign(fm, "desk_size", patch.size);
   if (patch.group !== undefined) assign(fm, "desk_group", patch.group);
   if (patch.objectGroup !== undefined) assign(fm, "desk_object_group", patch.objectGroup);
+  if (patch.viewMode !== undefined) assign(fm, "desk_view_mode", patch.viewMode);
+  if (patch.cardStyle !== undefined) assign(fm, "desk_card_style", patch.cardStyle);
+  if (patch.previewWidth !== undefined) assign(fm, "desk_preview_width", patch.previewWidth);
+  if (patch.previewHeight !== undefined) assign(fm, "desk_preview_height", patch.previewHeight);
+  if (patch.hidden !== undefined) assign(fm, "desk_hidden", patch.hidden);
 }
 
 /**
@@ -51,11 +71,16 @@ export function applyRecentLayoutWrite(
   card.y = write.y;
   if (write.size !== undefined) card.size = write.size;
   card.placed = true;
+  if (write.group !== undefined) card.group = write.group;
   if (write.objectGroup !== undefined) card.objectGroup = write.objectGroup;
+  if (write.viewMode !== undefined) card.viewMode = write.viewMode;
+  if (write.cardStyle !== undefined) card.cardStyle = write.cardStyle;
+  if (write.previewWidth !== undefined) card.previewWidth = write.previewWidth;
+  if (write.previewHeight !== undefined) card.previewHeight = write.previewHeight;
   return "applied";
 }
 
-function assign(fm: Record<string, unknown>, key: string, value: number | string | null): void {
+function assign(fm: Record<string, unknown>, key: string, value: number | string | boolean | null): void {
   if (value === null) {
     delete fm[key];
     return;

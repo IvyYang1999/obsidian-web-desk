@@ -24,9 +24,9 @@ export function resizeImageToWidth(
   image: Pick<CanvasImage, "w" | "h">,
   requestedWidth: number,
 ): { w: number; h: number } {
-  const width = Math.min(MAX_IMAGE_WIDTH, Math.max(MIN_IMAGE_WIDTH, Math.round(requestedWidth)));
+  const width = Math.min(MAX_IMAGE_WIDTH, Math.max(MIN_IMAGE_WIDTH, requestedWidth));
   const ratio = positive(image.w, 1) / positive(image.h, 1);
-  return { w: width, h: Math.max(1, Math.round(width / ratio)) };
+  return { w: width, h: Math.max(1, width / ratio) };
 }
 
 export function sanitizeImageFileName(rawName: string, mimeType: string): string {

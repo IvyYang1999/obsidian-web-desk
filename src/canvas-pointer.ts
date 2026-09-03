@@ -16,12 +16,34 @@ export function beginCanvasPointerSession(options: CanvasPointerSessionOptions):
   const document = element.ownerDocument;
   const start = { x: event.clientX, y: event.clientY };
   const threshold = options.thresholdPx ?? 4;
+  const activeButtonMask = event.button === 0
+    ? 1
+    : event.button === 1
+      ? 4
+      : event.button === 2
+        ? 2
+        : event.button >= 3
+          ? 2 ** event.button
+          : event.buttons;
   let moved = false;
+  let finished = false;
   if (options.resizing) element.addClass("is-resizing");
   try { element.setPointerCapture(event.pointerId); } catch {}
 
   const onMove = (moveEvent: PointerEvent): void => {
     if (moveEvent.pointerId !== event.pointerId) return;
+    // Electron can emit a final hover-like pointermove (buttons=0) before the
+    // matching pointerup. It is a release boundary, not a new drag sample.
+    // Commit the last valid geometry so the stray screen coordinate cannot
+    // move an object again or leave snap guides active.
+    if (
+      moveEvent.pointerType !== "touch" &&
+      activeButtonMask > 0 &&
+      (moveEvent.buttons & activeButtonMask) === 0
+    ) {
+      finish(moveEvent);
+      return;
+    }
     const zoom = Math.max(0.01, options.zoom());
     const delta = {
       x: (moveEvent.clientX - start.x) / zoom,
@@ -33,6 +55,8 @@ export function beginCanvasPointerSession(options: CanvasPointerSessionOptions):
   };
   const finish = (endEvent: PointerEvent): void => {
     if (endEvent.pointerId !== event.pointerId) return;
+    if (finished) return;
+    finished = true;
     document.removeEventListener("pointermove", onMove, true);
     document.removeEventListener("pointerup", finish, true);
     document.removeEventListener("pointercancel", finish, true);

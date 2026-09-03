@@ -1,6 +1,7 @@
 import { Readability } from "@mozilla/readability";
 import { App, Notice, Platform, TFile, normalizePath, requestUrl } from "obsidian";
 import { WebDeskSettings } from "./types";
+import { localizeWebsitePreview } from "./preview-assets";
 import {
   REQUEST_HEADERS,
   absolutizeUrls,
@@ -42,6 +43,7 @@ interface ExtractedContent {
   author: string;
   body: string;
   description: string;
+  image: string;
   warning?: string;
 }
 
@@ -53,8 +55,12 @@ export interface ImportOptions {
 
 export interface ImportResult {
   file: TFile;
+  meta: BookmarkMeta;
+  created: boolean;
   warning?: string;
 }
+
+const inFlightImports = new WeakMap<App, Map<string, Promise<ImportResult>>>();
 
 export async function importUrlAsBookmark(
   app: App,
@@ -63,15 +69,52 @@ export async function importUrlAsBookmark(
   options: ImportOptions = {},
 ): Promise<ImportResult> {
   const url = normalizeUrlOrThrow(rawUrl);
+  let byUrl = inFlightImports.get(app);
+  if (!byUrl) {
+    byUrl = new Map<string, Promise<ImportResult>>();
+    inFlightImports.set(app, byUrl);
+  }
+  const pending = byUrl.get(url);
+  if (pending) return pending;
+
+  const task = importNormalizedUrlAsBookmark(app, settings, url, options);
+  byUrl.set(url, task);
+  try {
+    return await task;
+  } finally {
+    if (byUrl.get(url) === task) byUrl.delete(url);
+  }
+}
+
+async function importNormalizedUrlAsBookmark(
+  app: App,
+  settings: WebDeskSettings,
+  url: string,
+  options: ImportOptions,
+): Promise<ImportResult> {
+  const existing = findBookmarkFileByUrl(app, settings, url);
+  if (existing) {
+    return {
+      file: existing,
+      meta: bookmarkMetaFromFile(app, existing, url),
+      created: false,
+    };
+  }
   const route = classifyUrl(url);
   const extracted = await extract(url, route);
+  extracted.image = await localizeWebsitePreview(app, settings, url, extracted.image);
   const file = await writeBookmarkNote(app, settings, url, extracted, options);
 
   if (extracted.warning) {
     new Notice(extracted.warning, 6000);
   }
 
-  return { file, warning: extracted.warning };
+  return {
+    file,
+    meta: extractedToBookmarkMeta(url, extracted),
+    created: true,
+    warning: extracted.warning,
+  };
 }
 
 /** 嵌入画布用：只抓取元信息，不落盘建文件。 */
@@ -79,18 +122,71 @@ export interface BookmarkMeta {
   url: string;
   title: string;
   description: string;
+  image: string;
   author: string;
   sourceLabel: string;
 }
 
-export async function fetchBookmarkMeta(rawUrl: string): Promise<BookmarkMeta> {
+export async function fetchBookmarkMeta(
+  rawUrl: string,
+  preview?: { app: App; settings: WebDeskSettings },
+): Promise<BookmarkMeta> {
   const url = normalizeUrlOrThrow(rawUrl);
   const route = classifyUrl(url);
   const extracted = await extract(url, route);
+  const image = preview
+    ? await localizeWebsitePreview(preview.app, preview.settings, url, extracted.image)
+    : extracted.image;
   return {
     url,
     title: extracted.title,
     description: extracted.description,
+    image,
+    author: extracted.author,
+    sourceLabel: extracted.sourceLabel,
+  };
+}
+
+function findBookmarkFileByUrl(app: App, settings: WebDeskSettings, url: string): TFile | null {
+  const folder = normalizePath(settings.bookmarkFolder);
+  const prefix = `${folder}/`;
+  const key = normalizedUrlKey(url);
+  for (const file of app.vault.getMarkdownFiles()) {
+    if (!file.path.startsWith(prefix)) continue;
+    const cached = app.metadataCache.getFileCache(file)?.frontmatter?.url;
+    if (typeof cached === "string" && normalizedUrlKey(cached) === key) return file;
+  }
+  return null;
+}
+
+function normalizedUrlKey(value: string): string {
+  try {
+    return normalizeUrlOrThrow(value);
+  } catch {
+    return value.trim();
+  }
+}
+
+function bookmarkMetaFromFile(app: App, file: TFile, fallbackUrl: string): BookmarkMeta {
+  const frontmatter = (app.metadataCache.getFileCache(file)?.frontmatter ?? {}) as Record<string, unknown>;
+  return {
+    url: typeof frontmatter.url === "string" ? frontmatter.url : fallbackUrl,
+    title: typeof frontmatter.title === "string" && frontmatter.title.trim()
+      ? frontmatter.title.trim()
+      : file.basename,
+    description: typeof frontmatter.description === "string" ? frontmatter.description : "",
+    image: typeof frontmatter.preview_image === "string" ? frontmatter.preview_image : "",
+    author: typeof frontmatter.author === "string" ? frontmatter.author : "",
+    sourceLabel: typeof frontmatter.source_label === "string" ? frontmatter.source_label : "网页",
+  };
+}
+
+function extractedToBookmarkMeta(url: string, extracted: ExtractedContent): BookmarkMeta {
+  return {
+    url,
+    title: extracted.title,
+    description: extracted.description,
+    image: extracted.image,
     author: extracted.author,
     sourceLabel: extracted.sourceLabel,
   };
@@ -178,6 +274,7 @@ async function extractTweet(url: string): Promise<ExtractedContent> {
     author,
     body,
     description: cleanInlineText(firstLine, 120),
+    image: photoUrls[0] ?? "",
   };
 }
 
@@ -228,6 +325,7 @@ async function extractViaClipiiOrCard(url: string, route: Route): Promise<Extrac
       author: "",
       body: body.trim(),
       description: "",
+      image: firstMarkdownImage(body),
     };
   } catch (error) {
     return createLinkCard(url, route, `clipii 抓取失败（${getErrorMessage(error)}），已仅存链接卡片`);
@@ -286,6 +384,7 @@ async function extractArticleOrToolCard(url: string): Promise<ExtractedContent> 
           author: cleanInlineText(article?.byline ?? "", 120),
           body: markdown,
           description: meta.description,
+          image: meta.image,
         };
       }
     }
@@ -322,6 +421,7 @@ function buildToolCard(
     author: host,
     body: lines.join("\n"),
     description: meta.description,
+    image: meta.image,
   };
 }
 
@@ -334,6 +434,7 @@ function createLinkCard(url: string, route: Route, warning: string): ExtractedCo
     author: "",
     body: ["> 抓取失败，仅存链接。可稍后重新导入。", "", `[${url}](${url})`].join("\n"),
     description: "",
+    image: "",
     warning,
   };
 }
@@ -386,6 +487,9 @@ async function writeBookmarkNote(
   if (extracted.description) {
     frontmatter.push(`description: ${quoteYaml(extracted.description)}`);
   }
+  if (extracted.image) {
+    frontmatter.push(`preview_image: ${quoteYaml(extracted.image)}`);
+  }
   frontmatter.push(`clipped: ${clipped}`);
   frontmatter.push("tags: [bookmark]");
   if (typeof options.x === "number" && typeof options.y === "number") {
@@ -399,6 +503,10 @@ async function writeBookmarkNote(
 
   const content = [...frontmatter, body].join("\n");
   return app.vault.create(filePath, content);
+}
+
+function firstMarkdownImage(markdown: string): string {
+  return markdown.match(/!\[[^\]]*\]\((https?:\/\/[^\s)]+)(?:\s+"[^"]*")?\)/i)?.[1] ?? "";
 }
 
 async function ensureFolder(app: App, folderPath: string): Promise<void> {

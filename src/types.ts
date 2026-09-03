@@ -1,25 +1,34 @@
 import type { App } from "obsidian";
+import type { CardViewMode } from "./card-view-state";
+import type { CardStyle } from "./canvas-ui-state";
 
-/** 画布上的分组框（命名矩形区域），存插件 data.json。 */
-export interface GroupBox {
+/** 分组与文本框共享的可选容器外观；缺字段代表干净的无容器模式。 */
+export interface CanvasContainerAppearance {
+  color: string;
+  showBorder?: boolean;
+  showFill?: boolean;
+}
+
+/** 画布上的命名区域；代码和旧数据仍沿用 GroupBox，界面统一称“区域”。 */
+export interface GroupBox extends CanvasContainerAppearance {
   id: string;
   name: string;
   x: number;
   y: number;
   w: number;
   h: number;
-  color: string;
 }
 
 /** 画布上的文本框（备注），存插件 data.json。 */
-export interface TextBox {
+export interface TextBox extends CanvasContainerAppearance {
   id: string;
   text: string;
   x: number;
   y: number;
   w: number;
   h: number;
-  color: string;
+  /** 空间区域归属；与 Figma 式逻辑组合相互独立。 */
+  group?: string;
   /** Figma 式逻辑组合；与分类分组框无关。 */
   objectGroup?: string;
 }
@@ -32,6 +41,8 @@ export interface CanvasImage {
   y: number;
   w: number;
   h: number;
+  /** 空间区域归属；与 Figma 式逻辑组合相互独立。 */
+  group?: string;
   objectGroup?: string;
 }
 
@@ -48,6 +59,8 @@ export interface Rating {
   x: number;
   y: number;
   link?: RatingLink;
+  /** 空间区域归属；与 Figma 式逻辑组合相互独立。 */
+  group?: string;
   /** 评分没有独立缩放手柄；组合缩放通过该比例持久化。 */
   scale?: number;
   objectGroup?: string;
@@ -90,6 +103,8 @@ export interface WebDeskSettings {
   bookmarkFolder: string;
   imageFolder: string;
   defaultIconSize: number;
+  /** 已由响应头确认禁止 iframe 的站点；避免反复尝试空白嵌入。 */
+  blockedEmbedHosts: string[];
 }
 
 /** 网页卡片自身的内容属性；不占用画布上的独立组件。 */
@@ -103,6 +118,7 @@ export const DEFAULT_SETTINGS: WebDeskSettings = {
   bookmarkFolder: "收藏夹",
   imageFolder: "附件/网页桌面",
   defaultIconSize: 96,
+  blockedEmbedHosts: [],
 };
 
 /** 画布上单个收藏（一个 md 文件）的投影。 */
@@ -115,11 +131,18 @@ export interface BookmarkCard {
   host: string;
   type: string;
   description: string;
+  previewImage: string;
   rating: number;
   note: string;
+  /** 始终可见于卡片下方的公开说明；与内部备注分离。 */
+  caption: string;
   x: number;
   y: number;
   size: number;
+  viewMode: CardViewMode;
+  cardStyle: CardStyle;
+  previewWidth: number;
+  previewHeight: number;
   group: string;
   objectGroup: string;
   /** 是否有手动布局（frontmatter 里有 desk_x/desk_y）。 */
@@ -132,15 +155,17 @@ export const SIZE_SMALL = 72;
 export const SIZE_MEDIUM = 96;
 export const SIZE_LARGE = 128;
 
-export const GROUP_COLORS = [
-  "#7aa2f7",
-  "#9ece6a",
-  "#e0af68",
-  "#bb9af7",
-  "#f7768e",
-  "#7dcfff",
-  "#9aa5ce",
-];
+export const GROUP_COLOR_PRESETS = [
+  { name: "蓝色", value: "#7aa2f7" },
+  { name: "绿色", value: "#9ece6a" },
+  { name: "琥珀色", value: "#e0af68" },
+  { name: "紫色", value: "#bb9af7" },
+  { name: "玫红色", value: "#f7768e" },
+  { name: "青色", value: "#7dcfff" },
+  { name: "灰蓝色", value: "#9aa5ce" },
+] as const;
+
+export const GROUP_COLORS = GROUP_COLOR_PRESETS.map((preset) => preset.value);
 
 export const CANVAS_BOUND = 10000;
 

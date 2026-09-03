@@ -1,4 +1,6 @@
 import { ItemView, Menu, Notice, setIcon, TFile, WorkspaceLeaf } from "obsidian";
+import { CanvasDrilldown } from "./embed";
+import { resolveCanvasReference } from "./canvas-reference";
 import { importUrlAsBookmark } from "./importer";
 import {
   imageFilesFrom,
@@ -15,12 +17,34 @@ import {
 } from "./file-link-storage";
 import { planAutoPositions, readCard, writeDeskFields } from "./layout";
 import { applyRecentLayoutWrite, RecentLayoutWrite } from "./layout-state";
-import { CardPropertiesModal, ConfirmModal, TextInputModal } from "./modals";
+import { CanvasFileSuggestModal, CardPropertiesModal, ConfirmModal, PreviewFileSuggestModal, TextInputModal } from "./modals";
 import { normalizeRatingValue, ratingLinkState } from "./rating-state";
 import { applyCardPropertiesToFrontmatter } from "./card-properties-state";
+import { applyCardCaptionToFrontmatter, normalizeCardCaption } from "./card-caption-state";
 import { cardAccessibleLabel, renderCardPropertyIndicators } from "./card-properties-ui";
+import { renderWebCardVisual, updateWebCardElementFrame } from "./card-view";
+import {
+  cardPlacementFrame,
+  DEFAULT_PREVIEW_HEIGHT,
+  DEFAULT_PREVIEW_WIDTH,
+  resizeCardPlacement,
+  scaleCardPlacement,
+  switchCardViewMode,
+  type CardViewMode,
+} from "./card-view-state";
 import { beginCanvasPointerSession } from "./canvas-pointer";
+import { planCanvasObjectDeletion } from "./canvas-delete";
+import {
+  canvasGridBackground,
+  createCanvasSnapGuideLayer,
+  createCanvasSnapSession,
+  snapGuidesMatchingRect,
+  type CanvasSnapGuideLayer,
+  type SnapRect,
+} from "./canvas-snap";
 import { canvasWheelIntent } from "./canvas-wheel";
+import { canvasSafeViewport, fitCanvasBounds } from "./canvas-viewport-state";
+import { processFrontmatterSerially } from "./frontmatter-write";
 import {
   GroupObjectRect,
   objectGroupBounds,
@@ -30,13 +54,19 @@ import {
   translateObjectGroup,
 } from "./object-group-state";
 import {
+  areaMembers,
+  arrowIntersectsRect,
   arrowLine,
   arrowsWithoutEndpoint,
+  clearGroupMembership,
   cycleColor,
   createGroupBox,
   groupAtPoint,
   hasArrowBetween,
+  nextAvailableGroupName,
   pruneDanglingArrows as pruneSceneArrows,
+  recomputeGroupMembership,
+  renameGroupMembership,
 } from "./canvas-state";
 import {
   BookmarkCard,
@@ -56,7 +86,34 @@ import {
   VIEW_TYPE_WEB_DESK,
   WebDeskSettings,
 } from "./types";
-import { colorFromString, faviconUrl, getErrorMessage, isProbablyUrl } from "./util";
+import { getErrorMessage, isProbablyUrl } from "./util";
+import { previewImageSource } from "./preview-assets";
+import {
+  openCanvasFilePreview,
+  renderFileCardVisual,
+  updateFileCardFrame,
+  type CanvasFilePreviewHandle,
+} from "./file-preview";
+import { canvasFileKind, canvasFileKindLabel, supportsCanvasFilePreview } from "./file-preview-state";
+import { assessRemoteEmbed } from "./web-embed-policy-runtime";
+import { isRememberedBlockedHost, rememberBlockedEmbedHost } from "./web-embed-policy";
+import {
+  appendCanvasContainerAppearanceMenuItems,
+  applyCanvasContainerAppearance,
+  beginInlineGroupNameEdit,
+  createCanvasCreateRail,
+  createCanvasObjectToolbar,
+  positionCanvasObjectToolbar,
+  renderPendingWebCard,
+  showCanvasContainerAppearanceMenu,
+  type CanvasToolbarAction,
+} from "./canvas-chrome";
+import {
+  hasCanvasContent,
+  normalizeCardStyle,
+  type CardStyle,
+  type PendingWebCard,
+} from "./canvas-ui-state";
 
 export interface WebDeskHost {
   getSettings(): WebDeskSettings;
@@ -72,6 +129,7 @@ export interface WebDeskHost {
   setRatings(ratings: Rating[]): void;
   getTransform(): CanvasTransform;
   setTransform(transform: CanvasTransform): void;
+  setBlockedEmbedHosts(hosts: string[]): void;
 }
 
 interface Point {
@@ -82,6 +140,7 @@ interface Point {
 interface ViewObject extends GroupObjectRect {
   kind: "card" | "image" | "textbox" | "rating";
   id: string;
+  group: string;
   objectGroup: string;
 }
 
@@ -111,17 +170,30 @@ export class WebDeskView extends ItemView {
   private arrowDraft: ArrowEndpoint | null = null;
   private pendingArrowStart = false;
   private editingTextBoxId: string | null = null;
+  private editingGroupId: string | null = null;
+  private spacePanning = false;
   private selected = new Set<string>();
   private objectSelectionEl: HTMLElement | null = null;
+  private selectionToolbarEl: HTMLElement | null = null;
+  private selectedGroupId: string | null = null;
+  private pendingImports = new Map<string, PendingWebCard>();
+  private snapGuideLayer: CanvasSnapGuideLayer | null = null;
   private transform: CanvasTransform = { panX: 0, panY: 0, zoom: 1 };
 
   /** >0 表示有交互进行中（拖拽/导入），推迟重绘。 */
   private interactionLock = 0;
   /** 近期本地写回的坐标（path → x/y/时刻）：metadataCache 滞后窗口内以本地为准，防视觉回跳。 */
   private layoutWrites = new Map<string, RecentLayoutWrite>();
+  /** 最近由 Delete/移出画布隐藏的卡片；metadataCache 滞后时阻止它瞬间复活。 */
+  private hiddenWrites = new Map<string, number>();
   private cardPropertyWrites = new Map<string, { properties: CardProperties; at: number }>();
+  private cardCaptionWrites = new Map<string, { caption: string; at: number }>();
+  private editingCaptionPath: string | null = null;
   private refreshTimer: number | null = null;
   private autoPlaceRunning = false;
+  private drilldown: CanvasDrilldown | null = null;
+  private filePreview: CanvasFilePreviewHandle | null = null;
+  private canvasFileCache = new Map<string, { isCanvas: boolean; mtime: number }>();
 
   constructor(leaf: WorkspaceLeaf, host: WebDeskHost) {
     super(leaf);
@@ -148,6 +220,10 @@ export class WebDeskView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    this.filePreview?.close();
+    this.filePreview = null;
+    this.drilldown?.close();
+    this.drilldown = null;
     this.saveTransformNow();
   }
 
@@ -169,11 +245,26 @@ export class WebDeskView extends ItemView {
     this.marqueeEl.style.display = "none";
 
     this.hintEl = this.rootEl.createDiv({ cls: "web-desk-hint" });
-    this.hintEl.createDiv({ cls: "web-desk-hint-title", text: "网页桌面" });
+    this.hintEl.createDiv({ cls: "web-desk-hint-title", text: "把第一个网页放进来" });
     this.hintEl.createDiv({
       cls: "web-desk-hint-body",
-      text: "拖入或粘贴内容；Shift 点选，多选后 Ctrl/Cmd+G 组合。",
+      text: "粘贴链接，或拖入网页、Markdown、PDF 与图片。",
     });
+    const hintButton = this.hintEl.createEl("button", { cls: "web-desk-hint-action", text: "收藏 URL" });
+    hintButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.promptForUrl(this.visibleCenter());
+    });
+
+    createCanvasCreateRail(this.rootEl, [
+      { icon: "plus", label: "添加元素", onClick: (button) => this.showCreateMenu(button) },
+      { icon: "sticky-note", label: "新建文本框", onClick: () => {
+        const point = this.visibleCenter();
+        this.addTextBox(point.x - 130, point.y - 60);
+      } },
+      { icon: "square-dashed", label: "新建区域", onClick: () => this.createGroupAt(this.visibleCenter()) },
+      { icon: "ellipsis", label: "更多画布组件", onClick: (button) => this.showCreateMoreMenu(button) },
+    ]);
 
     const toolbar = this.rootEl.createDiv({ cls: "web-desk-toolbar" });
     const zoomOut = toolbar.createEl("button", { text: "－", cls: "web-desk-tool-btn" });
@@ -189,6 +280,13 @@ export class WebDeskView extends ItemView {
     this.rootEl.addEventListener("pointerdown", (event) => this.onCanvasPointerDown(event));
     this.rootEl.addEventListener("contextmenu", (event) => this.onCanvasContextMenu(event));
     this.rootEl.addEventListener("keydown", (event) => this.onKeyDown(event));
+    this.rootEl.addEventListener("keyup", (event) => {
+      if (event.code === "Space") this.spacePanning = false;
+    });
+    this.rootEl.addEventListener("blur", () => { this.spacePanning = false; });
+    const resizeObserver = new ResizeObserver(() => this.positionSelectionToolbar());
+    resizeObserver.observe(this.rootEl);
+    this.register(() => resizeObserver.disconnect());
     this.rootEl.addEventListener("dragover", (event) => {
       event.preventDefault();
       if (event.dataTransfer) {
@@ -226,12 +324,16 @@ export class WebDeskView extends ItemView {
       return;
     }
 
+    const now = Date.now();
+    for (const [path, at] of this.hiddenWrites) {
+      if (now - at > 10_000) this.hiddenWrites.delete(path);
+    }
     this.cards = this.bookmarkFiles()
       .map((file) => readCard(file, this.app, this.settings.defaultIconSize))
-      .filter((card): card is BookmarkCard => card !== null);
+      .filter((card): card is BookmarkCard => card !== null)
+      .filter((card) => !this.hiddenWrites.has(card.path));
 
     // 写盘成功但 metadataCache 未跟上时，cache 给的是旧坐标——以本地近期写入为准，防拖拽回跳
-    const now = Date.now();
     for (const card of this.cards) {
       const write = this.layoutWrites.get(card.path);
       if (write && applyRecentLayoutWrite(card, write, now) === "expired") {
@@ -245,11 +347,19 @@ export class WebDeskView extends ItemView {
         card.rating = propertyWrite.properties.rating;
         card.note = propertyWrite.properties.note;
       }
+      const captionWrite = this.cardCaptionWrites.get(card.path);
+      if (captionWrite && now - captionWrite.at > 10_000) {
+        this.cardCaptionWrites.delete(card.path);
+      } else if (captionWrite) {
+        card.caption = captionWrite.caption;
+      }
     }
 
     await this.autoPlaceNewcomers();
     this.pruneDanglingArrows();
     this.render();
+    // 旧数据里的图片、文本和评分没有区域字段；按当前空间位置做一次兼容归属。
+    void this.persistMovedObjects([], true);
   }
 
   private scheduleRefresh(delayMs = 300): void {
@@ -322,6 +432,7 @@ export class WebDeskView extends ItemView {
     this.textBoxEls.clear();
     this.ratingEls.clear();
     this.canvasEl.empty();
+    this.snapGuideLayer = createCanvasSnapGuideLayer(this.canvasEl);
 
     this.buildSvgLayer();
     this.renderArrows();
@@ -334,11 +445,25 @@ export class WebDeskView extends ItemView {
     }
     this.renderTextBoxes();
     this.renderRatings();
+    for (const pending of this.pendingImports.values()) {
+      renderPendingWebCard(
+        this.canvasEl,
+        pending,
+        () => this.retryPendingImport(pending.id),
+        () => this.dismissPendingImport(pending.id),
+      );
+    }
+    this.syncSelection();
 
-    this.hintEl.style.display =
-      this.cards.length === 0 && this.host.getImages().length === 0 && this.host.getRatings().length === 0
-        ? "flex"
-        : "none";
+    this.hintEl.style.display = hasCanvasContent({
+      cards: this.cards.length,
+      images: this.host.getImages().length,
+      textboxes: this.host.getTextBoxes().length,
+      groups: this.host.getGroups().length,
+      arrows: this.host.getArrows().length,
+      ratings: this.host.getRatings().length,
+      pending: this.pendingImports.size,
+    }) ? "none" : "flex";
   }
 
   private renderIcon(card: BookmarkCard): void {
@@ -347,39 +472,42 @@ export class WebDeskView extends ItemView {
     if (card.targetPath) el.addClass("is-file-link");
     el.style.left = `${card.x}px`;
     el.style.top = `${card.y}px`;
-    el.style.width = `${card.size + 24}px`;
-
-    const thumb = el.createDiv({ cls: "web-desk-icon-thumb" });
-    thumb.style.width = `${card.size}px`;
-    thumb.style.height = `${card.size}px`;
 
     if (card.targetPath) {
-      thumb.addClass("web-desk-file-thumb");
-      const icon = thumb.createDiv({ cls: "web-desk-file-icon" });
-      setIcon(icon, "file-text");
-      if (!(this.app.vault.getAbstractFileByPath(card.targetPath) instanceof TFile)) {
-        el.addClass("is-file-missing");
-      }
-    } else if (card.url && card.host) {
-      const img = thumb.createEl("img", {
-        cls: "web-desk-icon-img",
-        attr: { src: faviconUrl(card.host), alt: card.host, draggable: "false" },
+      const file = this.app.vault.getAbstractFileByPath(card.targetPath);
+      renderFileCardVisual(this.app, this, el, {
+        ...card,
+        file: file instanceof TFile ? file : null,
+        path: card.targetPath,
+        onOpen: () => this.openMarkdown(card),
+        onFullscreen: () => this.previewCanvasFile(card.targetPath),
       });
-      img.addEventListener("error", () => {
-        img.remove();
-        this.appendLetterBlock(thumb, card);
-      });
+      const icon = el.querySelector<HTMLElement>(".web-desk-file-icon, .web-desk-file-card-icon");
+      if (icon) void this.decorateCanvasReference(card.targetPath, el, icon);
     } else {
-      this.appendLetterBlock(thumb, card);
+      renderWebCardVisual(el, {
+        ...card,
+        cardStyle: card.cardStyle,
+        previewImage: previewImageSource(this.app, card.previewImage),
+        captionEditing: this.editingCaptionPath === card.path,
+        onCaptionInput: (value) => { card.caption = value; },
+        onCaptionCommit: (value) => void this.persistCardCaption(card, value),
+        onEmbedFallback: () => {
+          this.host.setBlockedEmbedHosts(rememberBlockedEmbedHost(this.settings.blockedEmbedHosts, card.url));
+          void this.setCardViewMode(card, "preview");
+        },
+        onOpen: () => window.open(card.url, "_blank", "noopener,noreferrer"),
+        fallbackKey: card.path,
+      });
     }
-    renderCardPropertyIndicators(thumb, card.rating, card.note);
 
-    const label = el.createDiv({ cls: "web-desk-icon-label", text: card.title });
-    label.style.width = `${card.size + 24}px`;
     const handle = el.createDiv({ cls: "web-desk-icon-resize" });
-    handle.style.top = `${card.size - 4}px`;
+    if (card.targetPath) updateFileCardFrame(el, card);
+    else updateWebCardElementFrame(el, card);
 
     el.setAttribute("data-path", card.path);
+    el.setAttribute("role", "link");
+    el.tabIndex = 0;
     el.setAttribute("aria-label", cardAccessibleLabel(
       card.title,
       card.targetPath || card.url,
@@ -389,9 +517,14 @@ export class WebDeskView extends ItemView {
     if (card.note) el.setAttribute("title", card.note);
 
     el.addEventListener("pointerdown", (event) => this.onIconPointerDown(event, card, el));
+    el.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      void this.activateCard(card);
+    });
     el.addEventListener("dblclick", (event) => {
       event.stopPropagation();
-      this.openMarkdown(card);
+      void this.activateCard(card);
     });
     el.addEventListener("contextmenu", (event) => this.onIconContextMenu(event, card));
     if (card.targetPath) {
@@ -402,25 +535,15 @@ export class WebDeskView extends ItemView {
     this.iconEls.set(card.path, el);
   }
 
-  private appendLetterBlock(thumb: HTMLElement, card: BookmarkCard): void {
-    const letter = card.title.trim().charAt(0).toUpperCase() || "?";
-    const block = thumb.createDiv({ cls: "web-desk-icon-letter", text: letter });
-    block.style.backgroundColor = colorFromString(card.host || card.path);
-    block.style.fontSize = `${Math.round(card.size * 0.42)}px`;
-  }
-
   private renderGroup(group: GroupBox): void {
     const el = this.canvasEl.createDiv({ cls: "web-desk-group" });
     el.style.left = `${group.x}px`;
     el.style.top = `${group.y}px`;
     el.style.width = `${group.w}px`;
     el.style.height = `${group.h}px`;
-    el.style.borderColor = group.color;
-    el.style.backgroundColor = hexToRgba(group.color, 0.06);
+    applyCanvasContainerAppearance(el, group);
 
-    const header = el.createDiv({ cls: "web-desk-group-header" });
-    header.style.color = group.color;
-    header.createSpan({ text: group.name });
+    const header = el.createDiv({ cls: "web-desk-group-header", text: group.name });
     header.addEventListener("dblclick", (event) => {
       event.stopPropagation();
       this.renameGroup(group);
@@ -435,7 +558,21 @@ export class WebDeskView extends ItemView {
     });
 
     el.setAttribute("data-group-id", group.id);
+    el.setAttribute("role", "group");
+    el.setAttribute("aria-label", `区域：${group.name}`);
+    el.tabIndex = 0;
+    el.addEventListener("keydown", (event) => {
+      if (event.key === "F2" || event.key === "Enter") {
+        event.preventDefault();
+        this.renameGroup(group);
+      }
+    });
     this.groupEls.set(group.id, el);
+    if (this.editingGroupId === group.id) {
+      window.requestAnimationFrame(() => {
+        if (header.isConnected && this.editingGroupId === group.id) this.editGroupName(group, header);
+      });
+    }
   }
 
   // ---------- 坐标换算 ----------
@@ -450,7 +587,11 @@ export class WebDeskView extends ItemView {
 
   private applyTransform(): void {
     this.canvasEl.style.transform = `translate(${this.transform.panX}px, ${this.transform.panY}px) scale(${this.transform.zoom})`;
+    const grid = canvasGridBackground(this.transform.panX, this.transform.panY, this.transform.zoom);
+    this.rootEl.style.backgroundSize = grid.size;
+    this.rootEl.style.backgroundPosition = grid.position;
     this.zoomLabelEl.setText(`${Math.round(this.transform.zoom * 100)}%`);
+    this.positionSelectionToolbar();
   }
 
   private saveTransformDebounced(): void {
@@ -511,8 +652,9 @@ export class WebDeskView extends ItemView {
     };
 
     for (const card of this.cards) {
+      const frame = cardPlacementFrame(card);
       expand(card.x, card.y);
-      expand(card.x + card.size + 24, card.y + card.size + 44);
+      expand(card.x + frame.w, card.y + frame.h);
     }
     for (const group of this.host.getGroups()) {
       expand(group.x, group.y);
@@ -540,26 +682,23 @@ export class WebDeskView extends ItemView {
     }
 
     const rect = this.rootEl.getBoundingClientRect();
-    const padding = 60;
-    const zoom = clamp(
-      Math.min(
-        (rect.width - padding * 2) / (maxX - minX + 1),
-        (rect.height - padding * 2) / (maxY - minY + 1),
-      ),
+    const fitted = fitCanvasBounds(
+      rect.width,
+      rect.height,
+      { minX, minY, maxX, maxY },
       MIN_ZOOM,
       1.25,
     );
-    this.transform.zoom = zoom;
-    this.transform.panX = (rect.width - (maxX - minX) * zoom) / 2 - minX * zoom;
-    this.transform.panY = (rect.height - (maxY - minY) * zoom) / 2 - minY * zoom;
+    this.transform.zoom = fitted.zoom;
+    this.transform.panX = fitted.panX;
+    this.transform.panY = fitted.panY;
     this.applyTransform();
     this.saveTransformDebounced();
   }
 
   private onCanvasPointerDown(event: PointerEvent): void {
     const target = event.target as HTMLElement;
-    if (
-      event.button !== 0 ||
+    const blocked = Boolean(
       target.closest(".web-desk-icon") ||
       target.closest(".web-desk-group") ||
       target.closest(".web-desk-image") ||
@@ -567,7 +706,12 @@ export class WebDeskView extends ItemView {
       target.closest(".web-desk-rating") ||
       target.closest(".web-desk-object-selection") ||
       target.closest(".web-desk-toolbar")
-    ) {
+    );
+    if ((event.button === 1 || (event.button === 0 && this.spacePanning)) && !blocked) {
+      this.beginCanvasPan(event);
+      return;
+    }
+    if (event.button !== 0 || blocked) {
       return;
     }
 
@@ -609,6 +753,7 @@ export class WebDeskView extends ItemView {
       if (!moved) {
         if (!upEvent.shiftKey) {
           this.selected.clear();
+          this.selectedGroupId = null;
           this.clearArrowSelection();
           this.syncSelection();
         }
@@ -621,6 +766,13 @@ export class WebDeskView extends ItemView {
       for (const object of objects) {
         if (rectsIntersect(rect, object)) baseSelection.add(object.key);
       }
+      for (const group of this.host.getGroups()) {
+        if (rectsIntersect(rect, group)) baseSelection.add(`group:${group.id}`);
+      }
+      const scene = this.endpointScene();
+      for (const arrow of this.host.getArrows()) {
+        if (arrowIntersectsRect(arrow, scene, rect)) baseSelection.add(`arrow:${arrow.id}`);
+      }
       for (const object of objects) {
         if (object.objectGroup && baseSelection.has(object.key)) {
           objects.filter((entry) => entry.objectGroup === object.objectGroup)
@@ -628,6 +780,8 @@ export class WebDeskView extends ItemView {
         }
       }
       this.selected = baseSelection;
+      this.selectedGroupId = null;
+      this.clearArrowSelection();
       this.syncSelection();
     };
 
@@ -635,30 +789,78 @@ export class WebDeskView extends ItemView {
     this.rootEl.addEventListener("pointerup", onUp);
   }
 
+  private beginCanvasPan(event: PointerEvent): void {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const baseX = this.transform.panX;
+    const baseY = this.transform.panY;
+    const document = this.rootEl.ownerDocument;
+    const onMove = (moveEvent: PointerEvent): void => {
+      if (moveEvent.pointerId !== event.pointerId) return;
+      this.transform.panX = baseX + moveEvent.clientX - startX;
+      this.transform.panY = baseY + moveEvent.clientY - startY;
+      this.applyTransform();
+    };
+    const onUp = (upEvent: PointerEvent): void => {
+      if (upEvent.pointerId !== event.pointerId) return;
+      document.removeEventListener("pointermove", onMove, true);
+      document.removeEventListener("pointerup", onUp, true);
+      document.removeEventListener("pointercancel", onUp, true);
+      this.saveTransformDebounced();
+    };
+    document.addEventListener("pointermove", onMove, true);
+    document.addEventListener("pointerup", onUp, true);
+    document.addEventListener("pointercancel", onUp, true);
+  }
+
   private onKeyDown(event: KeyboardEvent): void {
+    if (
+      event.code === "Space" &&
+      !this.editingTextBoxId &&
+      !isEditablePasteTarget(event.target)
+    ) {
+      this.spacePanning = true;
+      event.preventDefault();
+      return;
+    }
     if (event.key === "Escape") {
       if (this.arrowDraft || this.pendingArrowStart) {
         this.cancelArrowDraft();
         return;
       }
       this.selected.clear();
+      this.selectedGroupId = null;
       this.clearArrowSelection();
       this.syncSelection();
       return;
     }
-    if ((event.key === "Delete" || event.key === "Backspace") && this.selected.size > 0) {
+    const isDeleteKey = event.key === "Delete" || event.key === "Backspace";
+    if (isDeleteKey && isEditablePasteTarget(event.target)) return;
+    if (isDeleteKey && this.selected.size > 0) {
       event.preventDefault();
-      this.confirmDeleteSelected();
+      void this.removeSelectedObjectsFromCanvas();
       return;
     }
-    if ((event.key === "Delete" || event.key === "Backspace") && this.selectedArrowId) {
+    if (isDeleteKey && this.selectedGroupId) {
+      event.preventDefault();
+      this.removeSelectedGroupFromCanvas();
+      return;
+    }
+    if (isDeleteKey && this.selectedArrowId) {
       event.preventDefault();
       this.removeArrow(this.selectedArrowId);
       return;
     }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
       event.preventDefault();
-      this.selected = new Set(this.allViewObjects().map((object) => object.key));
+      this.selected = new Set([
+        ...this.allViewObjects().map((object) => object.key),
+        ...this.host.getGroups().map((group) => `group:${group.id}`),
+        ...this.host.getArrows().map((arrow) => `arrow:${arrow.id}`),
+      ]);
+      this.selectedGroupId = null;
+      this.clearArrowSelection();
       this.syncSelection();
       return;
     }
@@ -696,7 +898,7 @@ export class WebDeskView extends ItemView {
     );
     menu.addItem((item) =>
       item
-        .setTitle("新建分组")
+        .setTitle("新建区域")
         .setIcon("square-dashed")
         .onClick(() => this.createGroupAt(point)),
     );
@@ -725,7 +927,13 @@ export class WebDeskView extends ItemView {
         .setTitle("全选")
         .setIcon("box-select")
         .onClick(() => {
-          this.selected = new Set(this.allViewObjects().map((object) => object.key));
+          this.selected = new Set([
+            ...this.allViewObjects().map((object) => object.key),
+            ...this.host.getGroups().map((group) => `group:${group.id}`),
+            ...this.host.getArrows().map((arrow) => `arrow:${arrow.id}`),
+          ]);
+          this.selectedGroupId = null;
+          this.clearArrowSelection();
           this.syncSelection();
         }),
     );
@@ -747,7 +955,7 @@ export class WebDeskView extends ItemView {
     if (this.interceptArrowClick(event)) {
       return;
     }
-    this.onViewObjectPointerDown(event, card.path, el, () => this.activateCard(card));
+    this.onViewObjectPointerDown(event, card.path, el);
   }
 
   private onIconResizePointerDown(
@@ -760,40 +968,62 @@ export class WebDeskView extends ItemView {
     event.stopPropagation();
     this.rootEl.focus();
     this.interactionLock += 1;
-    el.addClass("is-resizing");
-    const start = { x: event.clientX, y: event.clientY };
-    const origin = card.size;
-    let moved = false;
-    try { el.setPointerCapture(event.pointerId); } catch {}
-    const onMove = (moveEvent: PointerEvent): void => {
-      const dx = (moveEvent.clientX - start.x) / this.transform.zoom;
-      const dy = (moveEvent.clientY - start.y) / this.transform.zoom;
-      if (!moved && Math.hypot(dx, dy) * this.transform.zoom < 4) return;
-      moved = true;
-      const delta = Math.abs(dx) >= Math.abs(dy) ? dx : dy;
-      card.size = clamp(Math.round(origin + delta), 32, 320);
-      updateIconElementSize(el, card.size);
-    };
-    const onUp = (): void => {
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
-      el.removeEventListener("pointercancel", onUp);
-      el.removeClass("is-resizing");
-      if (!moved) {
-        this.interactionLock -= 1;
-        return;
-      }
-      void this.persistIconSize(card).finally(() => {
-        this.interactionLock -= 1;
-      });
-    };
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
-    el.addEventListener("pointercancel", onUp);
+    const origin = { ...card };
+    const originFrame = cardPlacementFrame(origin);
+    const snapSession = createCanvasSnapSession(this.snapTargets(new Set([card.path])));
+    beginCanvasPointerSession({
+      event,
+      element: el,
+      zoom: () => this.transform.zoom,
+      resizing: true,
+      onMove: ({ x: dx, y: dy }) => {
+        const raw = resizeCardPlacement(origin, { x: dx, y: dy });
+        const rawFrame = cardPlacementFrame(raw);
+        const preview = origin.viewMode !== "icon";
+        const dominantX = Math.abs(dx) >= Math.abs(dy);
+        const snapped = snapSession.resize(
+          { x: origin.x, y: origin.y, ...originFrame },
+          { x: origin.x, y: origin.y, ...rawFrame },
+          this.transform.zoom,
+          preview ? undefined : { x: dominantX, y: !dominantX },
+        );
+        const delta = preview
+          ? { x: snapped.rect.w - originFrame.w, y: snapped.rect.h - originFrame.h }
+          : dominantX
+            ? { x: snapped.rect.w - originFrame.w, y: 0 }
+            : { x: 0, y: snapped.rect.h - originFrame.h };
+        Object.assign(card, resizeCardPlacement(origin, delta));
+        if (card.targetPath) updateFileCardFrame(el, card);
+        else updateWebCardElementFrame(el, card);
+        this.positionSelectionToolbar();
+        const frame = cardPlacementFrame(card);
+        this.snapGuideLayer?.show(
+          snapGuidesMatchingRect({ x: card.x, y: card.y, ...frame }, snapped.guides),
+          this.transform.zoom,
+        );
+        this.renderArrows();
+      },
+      onEnd: (moved) => {
+        snapSession.clear();
+        this.snapGuideLayer?.hide();
+        if (!moved) {
+          this.interactionLock -= 1;
+          return;
+        }
+        this.roundViewObjectGeometry(this.allViewObjects().filter((object) => object.key === card.path));
+        void this.persistIconSize(card).finally(() => {
+          this.interactionLock -= 1;
+        });
+      },
+    });
   }
 
-  private activateCard(card: BookmarkCard): void {
+  private async activateCard(card: BookmarkCard): Promise<void> {
     if (card.targetPath) {
+      if (await this.isCanvasReference(card.targetPath)) {
+        this.openCanvasReference(card.targetPath);
+        return;
+      }
       this.openMarkdown(card);
       return;
     }
@@ -804,6 +1034,60 @@ export class WebDeskView extends ItemView {
     this.openMarkdown(card);
   }
 
+  private previewCanvasFile(path: string): void {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) {
+      new Notice("文件已移动或删除");
+      return;
+    }
+    if (!supportsCanvasFilePreview(file.path)) {
+      new Notice("此文件暂不支持画布内预览");
+      return;
+    }
+    this.filePreview?.close();
+    this.filePreview = openCanvasFilePreview(this.app, this, file, () => {
+      this.filePreview = null;
+    });
+  }
+
+  private async isCanvasReference(path: string): Promise<boolean> {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    const mtime = file instanceof TFile ? file.stat.mtime : -1;
+    const cached = this.canvasFileCache.get(path);
+    if (cached?.mtime === mtime) return cached.isCanvas;
+    const isCanvas = Boolean(await resolveCanvasReference(this.app, path));
+    this.canvasFileCache.set(path, { isCanvas, mtime });
+    return isCanvas;
+  }
+
+  private async decorateCanvasReference(
+    path: string,
+    cardEl: HTMLElement,
+    iconEl: HTMLElement,
+  ): Promise<void> {
+    if (!(await this.isCanvasReference(path)) || !cardEl.isConnected) return;
+    cardEl.addClass("is-canvas-reference");
+    setIcon(iconEl, "panels-top-left");
+    const thumb = cardEl.querySelector<HTMLElement>(".web-desk-icon-thumb");
+    if (thumb && !thumb.querySelector(".web-desk-canvas-reference-badge")) {
+      const badge = thumb.createSpan({ cls: "web-desk-canvas-reference-badge", text: "画布" });
+      badge.setAttribute("aria-hidden", "true");
+    }
+    const title = cardEl.querySelector<HTMLElement>(".web-desk-icon-label")?.textContent ?? path;
+    cardEl.setAttribute("aria-label", `画布引用：${title}`);
+  }
+
+  private openCanvasReference(path: string): void {
+    this.drilldown ??= new CanvasDrilldown({
+      app: this.app,
+      hostEl: this.rootEl,
+      settings: this.settings,
+      onSettingsChange: () => this.host.setBlockedEmbedHosts(this.settings.blockedEmbedHosts),
+      originLabel: "网页桌面",
+    });
+    void this.drilldown.open(path);
+  }
+
   private async persistDragged(cards: BookmarkCard[]): Promise<void> {
     this.interactionLock += 1;
     try {
@@ -812,17 +1096,15 @@ export class WebDeskView extends ItemView {
         if (!(file instanceof TFile)) {
           continue;
         }
-        const group = this.groupAt(
-          card.x + (card.size + 24) / 2,
-          card.y + (card.size + 44) / 2,
-        );
+        const frame = cardPlacementFrame(card);
+        const group = this.groupAt(card.x + frame.w / 2, card.y + frame.h / 2);
         card.group = group;
         await writeDeskFields(this.app, file, {
           x: card.x,
           y: card.y,
           group: group || null,
         });
-        this.layoutWrites.set(card.path, { x: card.x, y: card.y, objectGroup: card.objectGroup, at: Date.now() });
+        this.recordCardLayoutWrite(card);
       }
     } catch (error) {
       new Notice(`保存位置失败：${getErrorMessage(error)}`, 5000);
@@ -841,10 +1123,26 @@ export class WebDeskView extends ItemView {
     const menu = new Menu();
 
     if (card.targetPath) {
+      if (this.canvasFileCache.get(card.targetPath)?.isCanvas) {
+        menu.addItem((item) => item
+          .setTitle("进入画布")
+          .setIcon("panels-top-left")
+          .onClick(() => this.openCanvasReference(card.targetPath)));
+      }
       menu.addItem((item) => item
-        .setTitle("打开原笔记")
-        .setIcon("file-text")
+        .setTitle("在标签页打开")
+        .setIcon("external-link")
         .onClick(() => this.openMarkdown(card)));
+      if (supportsCanvasFilePreview(card.targetPath)) {
+        menu.addItem((item) => item
+          .setTitle("全屏预览")
+          .setIcon("maximize-2")
+          .onClick(() => this.previewCanvasFile(card.targetPath)));
+        menu.addItem((item) => item
+          .setTitle("切换展示方式")
+          .setIcon("panels-top-left")
+          .onClick(() => this.showCardModeMenu(card, this.iconEls.get(card.path) ?? this.rootEl)));
+      }
       menu.addItem((item) => item
         .setTitle("复制双链")
         .setIcon("copy")
@@ -880,6 +1178,10 @@ export class WebDeskView extends ItemView {
         .setTitle("编辑名称、评分与备注…")
         .setIcon("square-pen")
         .onClick(() => this.editWebCardProperties(card)));
+      menu.addItem((item) => item
+        .setTitle(card.viewMode === "preview" ? "显示为图标" : "显示为预览卡片")
+        .setIcon(card.viewMode === "preview" ? "app-window" : "panel-top")
+        .onClick(() => void this.setCardViewMode(card, card.viewMode === "preview" ? "icon" : "preview")));
     }
     menu.addItem((item) =>
       item
@@ -891,33 +1193,23 @@ export class WebDeskView extends ItemView {
       menu.addItem((item) => item
         .setTitle("为此文件添加评分")
         .setIcon("star")
-        .onClick(() => this.addRating({
-          x: card.x + card.size + 152,
-          y: card.y + 43,
-        }, card)));
+        .onClick(() => {
+          const frame = cardPlacementFrame(card);
+          this.addRating({ x: card.x + frame.w + 128, y: card.y + frame.h / 2 }, card);
+        }));
     }
     menu.addSeparator();
 
-    menu.addItem((item) =>
-      item
-        .setTitle(`图标大小：小（${SIZE_SMALL}px）`)
-        .setIcon("minimize-2")
-        .onClick(() => void this.setIconSize(card, SIZE_SMALL)),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle(`图标大小：中（${SIZE_MEDIUM}px）`)
-        .setIcon("square")
-        .onClick(() => void this.setIconSize(card, SIZE_MEDIUM)),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle(`图标大小：大（${SIZE_LARGE}px）`)
-        .setIcon("maximize-2")
-        .onClick(() => void this.setIconSize(card, SIZE_LARGE)),
-    );
-    menu.addItem((item) =>
-      item
+    if (card.viewMode !== "icon") {
+      menu.addItem((item) => item
+        .setTitle("恢复默认预览尺寸")
+        .setIcon("scaling")
+        .onClick(() => void this.setDefaultPreviewSize(card)));
+    } else {
+      menu.addItem((item) => item.setTitle(`图标大小：小（${SIZE_SMALL}px）`).setIcon("minimize-2").onClick(() => void this.setIconSize(card, SIZE_SMALL)));
+      menu.addItem((item) => item.setTitle(`图标大小：中（${SIZE_MEDIUM}px）`).setIcon("square").onClick(() => void this.setIconSize(card, SIZE_MEDIUM)));
+      menu.addItem((item) => item.setTitle(`图标大小：大（${SIZE_LARGE}px）`).setIcon("maximize-2").onClick(() => void this.setIconSize(card, SIZE_LARGE)));
+      menu.addItem((item) => item
         .setTitle("图标大小：自定义…")
         .setIcon("scaling")
         .onClick(() => {
@@ -927,15 +1219,12 @@ export class WebDeskView extends ItemView {
             placeholder: "32 ~ 320",
             onSubmit: (value) => {
               const size = Number(value);
-              if (Number.isFinite(size) && size >= 32 && size <= 320) {
-                void this.setIconSize(card, size);
-              } else {
-                new Notice("请输入 32 ~ 320 之间的数字");
-              }
+              if (Number.isFinite(size) && size >= 32 && size <= 320) void this.setIconSize(card, size);
+              else new Notice("请输入 32 ~ 320 之间的数字");
             },
           }).open();
-        }),
-    );
+        }));
+    }
     menu.addSeparator();
     menu.addItem((item) =>
       item
@@ -945,7 +1234,7 @@ export class WebDeskView extends ItemView {
     );
     menu.addItem((item) =>
       item
-        .setTitle("删除文件…")
+        .setTitle("删除收藏文件…")
         .setIcon("trash-2")
         .onClick(() => this.confirmDelete(card)),
     );
@@ -959,6 +1248,75 @@ export class WebDeskView extends ItemView {
   private async setIconSize(card: BookmarkCard, size: number): Promise<void> {
     card.size = size;
     await this.persistIconSize(card);
+    this.render();
+  }
+
+  private async setCardViewMode(card: BookmarkCard, mode: CardViewMode, retry = false): Promise<void> {
+    if (mode === "embed" && !card.targetPath) {
+      const statusId = `embed:${card.path}`;
+      const pending: PendingWebCard = {
+        id: statusId,
+        purpose: "embed",
+        url: card.url,
+        x: card.x,
+        y: card.y,
+        state: "loading",
+        title: "正在检查实时嵌入",
+        message: "正在读取网站的嵌入权限…",
+      };
+      this.pendingImports.set(statusId, pending);
+      this.render();
+      const assessment = await assessRemoteEmbed(card.url, retry ? [] : this.settings.blockedEmbedHosts);
+      if (!assessment.allowed) {
+        if (assessment.reason === "x-frame-options" || assessment.reason === "frame-ancestors") {
+          this.host.setBlockedEmbedHosts(
+            rememberBlockedEmbedHost(this.settings.blockedEmbedHosts, card.url),
+          );
+        }
+        pending.state = "error";
+        pending.title = "无法实时嵌入";
+        pending.message = assessment.reason === "invalid-url"
+          ? "实时嵌入只支持 HTTPS 网页"
+          : "网站禁止 iframe 嵌入，已保留卡片视图";
+        this.render();
+        if (card.viewMode === "embed") mode = "preview";
+        else return;
+      } else {
+        this.pendingImports.delete(statusId);
+      }
+    }
+    Object.assign(card, switchCardViewMode(card, mode));
+    await this.persistCardPlacement(card, { viewMode: mode === "icon" ? null : mode });
+    this.render();
+  }
+
+  private async persistCardCaption(card: BookmarkCard, value: string): Promise<void> {
+    const caption = normalizeCardCaption(value);
+    const file = this.app.vault.getAbstractFileByPath(card.path);
+    this.editingCaptionPath = null;
+    if (!(file instanceof TFile)) {
+      new Notice("找不到这个收藏对应的 Markdown 文件");
+      return;
+    }
+    this.interactionLock += 1;
+    try {
+      await processFrontmatterSerially(this.app, file, (frontmatter: Record<string, unknown>) => {
+        applyCardCaptionToFrontmatter(frontmatter, caption);
+      });
+      card.caption = caption;
+      this.cardCaptionWrites.set(card.path, { caption, at: Date.now() });
+      this.render();
+    } catch (error) {
+      new Notice(`保存 Caption 失败：${getErrorMessage(error)}`, 5000);
+    } finally {
+      this.interactionLock -= 1;
+    }
+  }
+
+  private async setDefaultPreviewSize(card: BookmarkCard): Promise<void> {
+    card.previewWidth = DEFAULT_PREVIEW_WIDTH;
+    card.previewHeight = DEFAULT_PREVIEW_HEIGHT;
+    await this.persistCardPlacement(card);
     this.render();
   }
 
@@ -980,7 +1338,7 @@ export class WebDeskView extends ItemView {
     }
     this.interactionLock += 1;
     try {
-      await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
+      await processFrontmatterSerially(this.app, file, (frontmatter: Record<string, unknown>) => {
         applyCardPropertiesToFrontmatter(frontmatter, properties);
       });
       this.cardPropertyWrites.set(card.path, { properties: { ...properties }, at: Date.now() });
@@ -997,15 +1355,38 @@ export class WebDeskView extends ItemView {
   }
 
   private async persistIconSize(card: BookmarkCard): Promise<void> {
+    await this.persistCardPlacement(card);
+  }
+
+  private async persistCardPlacement(
+    card: BookmarkCard,
+    extra: { viewMode?: CardViewMode | null; cardStyle?: CardStyle | null } = {},
+  ): Promise<void> {
     const file = this.app.vault.getAbstractFileByPath(card.path);
     if (file instanceof TFile) {
-      await writeDeskFields(this.app, file, { size: card.size });
+      await writeDeskFields(this.app, file, {
+        x: card.x,
+        y: card.y,
+        size: card.size,
+        previewWidth: card.previewWidth,
+        previewHeight: card.previewHeight,
+        ...extra,
+      });
     }
+    this.recordCardLayoutWrite(card);
+  }
+
+  private recordCardLayoutWrite(card: BookmarkCard): void {
     this.layoutWrites.set(card.path, {
       x: card.x,
       y: card.y,
       size: card.size,
+      group: card.group,
       objectGroup: card.objectGroup,
+      viewMode: card.viewMode,
+      cardStyle: card.cardStyle,
+      previewWidth: card.previewWidth,
+      previewHeight: card.previewHeight,
       at: Date.now(),
     });
   }
@@ -1013,8 +1394,13 @@ export class WebDeskView extends ItemView {
   private async removeFromDesk(card: BookmarkCard): Promise<void> {
     const file = this.app.vault.getAbstractFileByPath(card.path);
     if (file instanceof TFile) {
-      await writeDeskFields(this.app, file, { x: null, y: null, size: null, group: null, objectGroup: null });
+      await writeDeskFields(this.app, file, {
+        x: null, y: null, size: null, group: null, objectGroup: null,
+        viewMode: null, cardStyle: null, previewWidth: null, previewHeight: null,
+        hidden: true,
+      });
     }
+    this.hiddenWrites.set(card.path, Date.now());
     this.selected.delete(card.path);
     await this.refresh();
     new Notice("已移出画布（文件保留在收藏夹文件夹）");
@@ -1032,21 +1418,92 @@ export class WebDeskView extends ItemView {
     }).open();
   }
 
-  private confirmDeleteSelected(): void {
-    const paths = this.selectedCardPaths();
-    if (paths.length === 0) {
-      return;
-    }
-    new ConfirmModal(this.app, {
-      message: `删除 ${paths.length} 个收藏的 md 文件？（移入仓库回收站，图标随之消失）`,
-      okLabel: "删除",
-      onOk: () => void this.deleteFiles(paths),
-    }).open();
-  }
-
   private selectedCardPaths(): string[] {
     const available = new Set(this.cards.map((card) => card.path));
     return [...this.selected].filter((key) => available.has(key));
+  }
+
+  private async removeSelectedObjectsFromCanvas(): Promise<void> {
+    const plan = planCanvasObjectDeletion([
+      ...this.allViewObjects(),
+      ...this.host.getGroups().map((group) => ({ key: `group:${group.id}`, kind: "group" as const, id: group.id })),
+      ...this.host.getArrows().map((arrow) => ({ key: `arrow:${arrow.id}`, kind: "arrow" as const, id: arrow.id })),
+    ], this.selected);
+    const count = plan.cardIds.length + plan.imageIds.length + plan.textBoxIds.length +
+      plan.ratingIds.length + plan.groupIds.length + plan.arrowIds.length;
+    if (count === 0) return;
+
+    const cardIds = new Set(plan.cardIds);
+    const imageIds = new Set(plan.imageIds);
+    const textBoxIds = new Set(plan.textBoxIds);
+    const ratingIds = new Set(plan.ratingIds);
+    const groupIds = new Set(plan.groupIds);
+    const arrowIds = new Set(plan.arrowIds);
+    this.interactionLock += 1;
+    try {
+      const removedGroups = this.host.getGroups().filter((group) => groupIds.has(group.id));
+      const removedGroupNames = new Set(removedGroups.map((group) => group.name));
+      this.cards = this.cards.filter((card) => !cardIds.has(card.path));
+      const images = this.host.getImages().filter((image) => !imageIds.has(image.id));
+      const textBoxes = this.host.getTextBoxes().filter((box) => !textBoxIds.has(box.id));
+      const ratings = this.host.getRatings().filter((rating) => !ratingIds.has(rating.id));
+      for (const name of removedGroupNames) {
+        clearGroupMembership(images, name);
+        clearGroupMembership(textBoxes, name);
+        clearGroupMembership(ratings, name);
+      }
+      this.host.setImages(images);
+      this.host.setTextBoxes(textBoxes);
+      this.host.setRatings(ratings);
+      this.host.setGroups(this.host.getGroups().filter((group) => !groupIds.has(group.id)));
+      let arrows = this.host.getArrows().filter((arrow) => !arrowIds.has(arrow.id));
+      for (const cardId of cardIds) arrows = arrowsWithoutEndpoint(arrows, { kind: "card", ref: cardId });
+      for (const textBoxId of textBoxIds) arrows = arrowsWithoutEndpoint(arrows, { kind: "textbox", ref: textBoxId });
+      for (const groupId of groupIds) arrows = arrowsWithoutEndpoint(arrows, { kind: "group", ref: groupId });
+      this.host.setArrows(arrows);
+      this.selected.clear();
+      this.selectedGroupId = null;
+      this.clearArrowSelection();
+      this.syncSelection();
+      this.render();
+
+      for (const cardId of cardIds) {
+        const file = this.app.vault.getAbstractFileByPath(cardId);
+        if (!(file instanceof TFile)) continue;
+        await writeDeskFields(this.app, file, {
+          x: null, y: null, size: null, group: null, objectGroup: null,
+          viewMode: null, cardStyle: null, previewWidth: null, previewHeight: null,
+          hidden: true,
+        });
+        this.hiddenWrites.set(cardId, Date.now());
+        this.layoutWrites.delete(cardId);
+      }
+      for (const card of this.cards) {
+        if (!removedGroupNames.has(card.group)) continue;
+        card.group = "";
+        const file = this.app.vault.getAbstractFileByPath(card.path);
+        if (!(file instanceof TFile)) continue;
+        await writeDeskFields(this.app, file, { group: null });
+        this.recordCardLayoutWrite(card);
+      }
+    } catch (error) {
+      new Notice(`移出画布失败：${getErrorMessage(error)}`, 5000);
+    } finally {
+      this.interactionLock -= 1;
+    }
+    await this.refresh();
+    new Notice(`已从画布移除 ${count} 个元素`);
+  }
+
+  private removeSelectedGroupFromCanvas(): void {
+    const group = this.host.getGroups().find((entry) => entry.id === this.selectedGroupId);
+    if (!group) return;
+    this.host.setGroups(this.host.getGroups().filter((entry) => entry.id !== group.id));
+    this.host.setArrows(arrowsWithoutEndpoint(this.host.getArrows(), { kind: "group", ref: group.id }));
+    this.selectedGroupId = null;
+    void this.clearGroupMembership(group.name);
+    this.render();
+    new Notice("已从画布移除区域，区域内元素仍保留在画布上");
   }
 
   private async deleteFiles(paths: string[]): Promise<void> {
@@ -1098,29 +1555,253 @@ export class WebDeskView extends ItemView {
     for (const [id, el] of this.ratingEls) {
       el.toggleClass("is-selected", this.selected.has(objectKey("rating", id)));
     }
+    for (const [id, el] of this.groupEls) {
+      el.toggleClass("is-selected", id === this.selectedGroupId || this.selected.has(`group:${id}`));
+    }
+    this.renderArrows();
     this.renderObjectSelection();
+    this.renderSelectionToolbar();
+  }
+
+  private renderSelectionToolbar(): void {
+    this.selectionToolbarEl?.remove();
+    this.selectionToolbarEl = null;
+    if (this.selectedArrowId) {
+      const arrow = this.host.getArrows().find((entry) => entry.id === this.selectedArrowId);
+      const target = arrow ? this.arrowEls.get(arrow.id) : null;
+      if (!arrow || !target) return;
+      this.selectionToolbarEl = createCanvasObjectToolbar(this.rootEl, { icon: "move-up-right", label: "箭头" }, [
+        { icon: "tag", label: "编辑箭头标签", onClick: () => this.editArrowLabel(arrow) },
+        { icon: "palette", label: "更换箭头颜色", onClick: () => this.cycleArrowColor(arrow) },
+        { icon: "ellipsis", label: "更多箭头操作", onClick: (button) => this.showArrowMoreMenu(arrow, button) },
+      ]);
+      window.requestAnimationFrame(() => this.positionSelectionToolbar());
+      return;
+    }
+    if (this.selectedGroupId) {
+      const group = this.host.getGroups().find((entry) => entry.id === this.selectedGroupId);
+      const target = group ? this.groupEls.get(group.id) : null;
+      if (!group || !target) return;
+      this.selectionToolbarEl = createCanvasObjectToolbar(this.rootEl, { icon: "square-dashed", label: "区域" }, [
+        { icon: "pencil", label: "重命名区域", onClick: () => this.renameGroup(group) },
+        { icon: "paintbrush", label: "设置区域外观", onClick: (button) => showCanvasContainerAppearanceMenu(this.app, button, group, () => {
+          this.host.setGroups(this.host.getGroups());
+          this.render();
+        }) },
+        { icon: "ellipsis", label: "更多区域操作", onClick: (button) => this.dispatchContextMenu(target, button) },
+      ]);
+      window.requestAnimationFrame(() => this.positionSelectionToolbar());
+      return;
+    }
+    if (this.selected.size !== 1) return;
+    const [path] = this.selected;
+    const card = this.cards.find((entry) => entry.path === path);
+    let target = card ? this.iconEls.get(card.path) : null;
+    let identity = { icon: "layout-grid", label: "元素" };
+    const actions: CanvasToolbarAction[] = [];
+    if (card && target) {
+      const isCanvasReference = Boolean(card.targetPath && this.canvasFileCache.get(card.targetPath)?.isCanvas);
+      const fileKind = card.targetPath ? canvasFileKind(card.targetPath) : null;
+      identity = isCanvasReference
+        ? { icon: "panels-top-left", label: "画布" }
+        : card.targetPath
+          ? { icon: fileKind === "pdf" ? "file-type-2" : "file-text", label: canvasFileKindLabel(card.targetPath) }
+          : { icon: "globe-2", label: "网页" };
+      actions.push({
+        icon: isCanvasReference ? "corner-down-right" : "external-link",
+        label: isCanvasReference ? "进入画布" : card.targetPath ? "打开笔记" : "打开网页",
+        onClick: () => { void this.activateCard(card); },
+      });
+      if (card.targetPath && !isCanvasReference && supportsCanvasFilePreview(card.targetPath)) {
+        actions.push(
+          { icon: "maximize-2", label: "全屏预览", onClick: () => this.previewCanvasFile(card.targetPath) },
+          { icon: "panels-top-left", label: "切换展示方式", text: card.viewMode === "embed" ? "嵌入" : card.viewMode === "preview" ? "卡片" : "图标", onClick: (button) => this.showCardModeMenu(card, button) },
+        );
+      } else if (!card.targetPath) {
+        actions.push(
+          { icon: "square-pen", label: "编辑名称、评分与备注", onClick: () => this.editWebCardProperties(card) },
+          { icon: "panels-top-left", label: "切换展示方式", text: card.viewMode === "embed" ? "嵌入" : card.viewMode === "preview" ? cardStyleLabel(card.cardStyle) : "图标", onClick: (button) => this.showCardModeMenu(card, button) },
+          { icon: "captions", label: "编辑 Caption", onClick: () => { this.editingCaptionPath = card.path; this.render(); } },
+        );
+      }
+      actions.push({ icon: "ellipsis", label: "更多操作", separatorBefore: true, onClick: (button) => this.dispatchContextMenu(target!, button) });
+    } else {
+      const parsed = splitObjectKey(path);
+      if (!parsed) return;
+      target = parsed.kind === "image" ? this.imageEls.get(parsed.id)
+        : parsed.kind === "textbox" ? this.textBoxEls.get(parsed.id)
+          : this.ratingEls.get(parsed.id);
+      if (!target) return;
+      identity = parsed.kind === "image" ? { icon: "image", label: "图片" }
+        : parsed.kind === "textbox" ? { icon: "sticky-note", label: "文本" }
+          : { icon: "star", label: "评分" };
+      if (parsed.kind === "image") actions.push({ icon: "external-link", label: "打开图片文件", onClick: () => this.openCanvasImage(parsed.id) });
+      if (parsed.kind === "textbox") {
+        actions.push({ icon: "pencil", label: "编辑文字", onClick: () => target!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })) });
+        const box = this.host.getTextBoxes().find((entry) => entry.id === parsed.id);
+        if (box) actions.push({ icon: "paintbrush", label: "设置文本外观", onClick: (button) => showCanvasContainerAppearanceMenu(this.app, button, box, () => {
+          this.host.setTextBoxes(this.host.getTextBoxes());
+          this.render();
+        }) });
+      }
+      actions.push({ icon: "ellipsis", label: "更多操作", onClick: (button) => this.dispatchContextMenu(target!, button) });
+    }
+    this.selectionToolbarEl = createCanvasObjectToolbar(this.rootEl, identity, actions);
+    window.requestAnimationFrame(() => this.positionSelectionToolbar());
+  }
+
+  private showCardModeMenu(card: BookmarkCard, trigger: HTMLElement): void {
+    const menu = new Menu();
+    const modes: Array<{ mode: CardViewMode; label: string; icon: string }> = [
+      { mode: "icon", label: "图标", icon: "layout-grid" },
+      { mode: "preview", label: "卡片", icon: "panel-top" },
+      {
+        mode: "embed",
+        label: card.targetPath
+          ? "嵌入阅读"
+          : isRememberedBlockedHost(this.settings.blockedEmbedHosts, card.url)
+          ? "重新尝试实时嵌入"
+          : "实时嵌入",
+        icon: "app-window",
+      },
+    ];
+    for (const entry of modes) {
+      menu.addItem((item) => item
+        .setTitle(entry.label)
+        .setIcon(entry.icon)
+        .setChecked(card.viewMode === entry.mode)
+        .onClick(() => void this.setCardViewMode(card, entry.mode, entry.mode === "embed")));
+    }
+    if (!card.targetPath) {
+      menu.addSeparator();
+      for (const style of ["visual", "article", "compact"] as CardStyle[]) {
+        menu.addItem((item) => item
+          .setTitle(`卡片 · ${cardStyleLabel(style)}`)
+          .setIcon(style === "visual" ? "image" : style === "compact" ? "rows-3" : "newspaper")
+          .setChecked(card.viewMode === "preview" && normalizeCardStyle(card.cardStyle) === style)
+          .onClick(() => void this.setCardStyle(card, style)));
+      }
+    }
+    const rect = trigger.getBoundingClientRect();
+    menu.setParentElement(this.rootEl).setUseNativeMenu(false).showAtPosition({ x: rect.left, y: rect.bottom + 6 }, trigger.ownerDocument);
+  }
+
+  private async setCardStyle(card: BookmarkCard, style: CardStyle): Promise<void> {
+    card.cardStyle = style;
+    if (card.viewMode !== "preview") Object.assign(card, switchCardViewMode(card, "preview"));
+    await this.persistCardPlacement(card, { viewMode: "preview", cardStyle: style });
+    this.render();
+  }
+
+  private selectionTarget(): HTMLElement | null {
+    if (this.selected.size !== 1) return null;
+    const [key] = this.selected;
+    if (this.iconEls.has(key)) return this.iconEls.get(key) ?? null;
+    const parsed = splitObjectKey(key);
+    if (!parsed) return null;
+    return parsed.kind === "image" ? this.imageEls.get(parsed.id) ?? null
+      : parsed.kind === "textbox" ? this.textBoxEls.get(parsed.id) ?? null
+        : this.ratingEls.get(parsed.id) ?? null;
+  }
+
+  private dispatchContextMenu(target: HTMLElement, trigger: HTMLElement): void {
+    const rect = trigger.getBoundingClientRect();
+    target.dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: rect.left,
+      clientY: rect.bottom + 6,
+    }));
+  }
+
+  private openCanvasImage(id: string): void {
+    const image = this.host.getImages().find((entry) => entry.id === id);
+    const file = image ? this.app.vault.getAbstractFileByPath(image.path) : null;
+    if (file instanceof TFile) void this.app.workspace.getLeaf("tab").openFile(file);
+  }
+
+  private showCreateMenu(trigger: HTMLElement): void {
+    const menu = new Menu();
+    menu.addItem((item) => item.setTitle("收藏 URL…").setIcon("link-2").onClick(() => this.promptForUrl(this.visibleCenter())));
+    menu.addItem((item) => item.setTitle("插入 Markdown / PDF…").setIcon("file-plus-2").onClick(() => this.choosePreviewFile(this.visibleCenter())));
+    menu.addItem((item) => item.setTitle("引用其它画布…").setIcon("panels-top-left").onClick(() => this.chooseCanvasReference(this.visibleCenter())));
+    menu.addItem((item) => item.setTitle("新建文本框").setIcon("sticky-note").onClick(() => {
+      const point = this.visibleCenter();
+      this.addTextBox(point.x - 130, point.y - 60);
+    }));
+    menu.addItem((item) => item.setTitle("新建区域").setIcon("square-dashed").onClick(() => this.createGroupAt(this.visibleCenter())));
+    this.showMenuBelow(menu, trigger);
+  }
+
+  private choosePreviewFile(point: Point): void {
+    new PreviewFileSuggestModal(this.app, "", (file) => {
+      void this.importMarkdownFiles([file], point);
+    }).open();
+  }
+
+  private chooseCanvasReference(point: Point): void {
+    new CanvasFileSuggestModal(this.app, "", (file) => {
+      void resolveCanvasReference(this.app, file.path).then((canvas) => {
+        if (!canvas) {
+          new Notice("这篇笔记里没有可用的网页收藏画布");
+          return;
+        }
+        this.canvasFileCache.set(file.path, { isCanvas: true, mtime: file.stat.mtime });
+        void this.importMarkdownFiles([file], point);
+      });
+    }).open();
+  }
+
+  private showCreateMoreMenu(trigger: HTMLElement): void {
+    const menu = new Menu();
+    menu.addItem((item) => item.setTitle("新建评分").setIcon("star").onClick(() => this.addRating(this.visibleCenter())));
+    menu.addItem((item) => item.setTitle("画箭头（点两点）").setIcon("move-up-right").onClick(() => this.beginArrowFromScratch()));
+    menu.addItem((item) => item.setTitle("适应内容").setIcon("maximize").onClick(() => this.fitContent()));
+    this.showMenuBelow(menu, trigger);
+  }
+
+  private showMenuBelow(menu: Menu, trigger: HTMLElement): void {
+    const rect = trigger.getBoundingClientRect();
+    menu.setParentElement(this.rootEl).setUseNativeMenu(false).showAtPosition({ x: rect.right + 8, y: rect.top }, trigger.ownerDocument);
+  }
+
+  private positionSelectionToolbar(): void {
+    const toolbar = this.selectionToolbarEl;
+    if (!toolbar) return;
+    const target = this.selectedArrowId
+      ? this.arrowEls.get(this.selectedArrowId)
+      : this.selectedGroupId
+        ? this.groupEls.get(this.selectedGroupId)
+        : this.selectionTarget();
+    if (!target) return;
+    positionCanvasObjectToolbar(toolbar, target, this.rootEl);
   }
 
   private allViewObjects(): ViewObject[] {
     return [
-      ...this.cards.map((card) => ({
-        key: card.path,
-        kind: "card" as const,
-        id: card.path,
-        objectGroup: card.objectGroup,
-        x: card.x,
-        y: card.y,
-        w: card.size + 24,
-        h: card.size + 44,
-        minW: 56,
-        minH: 76,
-        maxW: 344,
-        maxH: 364,
-      })),
+      ...this.cards.map((card) => {
+        const frame = cardPlacementFrame(card);
+        return {
+          key: card.path,
+          kind: "card" as const,
+          id: card.path,
+          group: card.group,
+          objectGroup: card.objectGroup,
+          x: card.x,
+          y: card.y,
+          w: frame.w,
+          h: frame.h,
+          minW: card.viewMode !== "icon" ? 220 : 56,
+          minH: card.viewMode !== "icon" ? 160 : 76,
+          maxW: card.viewMode !== "icon" ? 720 : 344,
+          maxH: card.viewMode !== "icon" ? 640 : 364,
+        };
+      }),
       ...this.host.getImages().map((image) => ({
         key: objectKey("image", image.id),
         kind: "image" as const,
         id: image.id,
+        group: image.group ?? "",
         objectGroup: image.objectGroup ?? "",
         x: image.x,
         y: image.y,
@@ -1133,6 +1814,7 @@ export class WebDeskView extends ItemView {
         key: objectKey("textbox", box.id),
         kind: "textbox" as const,
         id: box.id,
+        group: box.group ?? "",
         objectGroup: box.objectGroup ?? "",
         x: box.x,
         y: box.y,
@@ -1147,6 +1829,7 @@ export class WebDeskView extends ItemView {
           key: objectKey("rating", rating.id),
           kind: "rating" as const,
           id: rating.id,
+          group: rating.group ?? "",
           objectGroup: rating.objectGroup ?? "",
           x: rating.x,
           y: rating.y,
@@ -1161,11 +1844,64 @@ export class WebDeskView extends ItemView {
     ];
   }
 
+  private snapTargets(excluded: Set<string>): SnapRect[] {
+    return [
+      ...this.allViewObjects()
+        .filter((object) => !excluded.has(object.key))
+        .map(({ key, x, y, w, h }) => ({ key, x, y, w, h })),
+      ...this.host.getGroups()
+        .filter((group) => !excluded.has(`group:${group.id}`))
+        .map((group) => ({ key: `group:${group.id}`, x: group.x, y: group.y, w: group.w, h: group.h })),
+    ];
+  }
+
+  /** Presentation values stay continuous; only the commit boundary is quantized. */
+  private roundViewObjectGeometry(objects: ViewObject[]): void {
+    for (const object of objects) {
+      this.applyObjectPosition(object.key, Math.round(object.x), Math.round(object.y));
+      if (object.kind === "card") {
+        const card = this.cards.find((entry) => entry.path === object.id);
+        if (!card) continue;
+        card.size = Math.round(card.size);
+        if (card.previewWidth !== undefined) card.previewWidth = Math.round(card.previewWidth);
+        if (card.previewHeight !== undefined) card.previewHeight = Math.round(card.previewHeight);
+        const el = this.iconEls.get(object.id);
+        if (el) {
+          if (card.targetPath) updateFileCardFrame(el, card);
+          else updateWebCardElementFrame(el, card);
+        }
+      } else if (object.kind === "image") {
+        const image = this.host.getImages().find((entry) => entry.id === object.id);
+        if (!image) continue;
+        image.w = Math.round(image.w);
+        image.h = Math.round(image.h);
+        const el = this.imageEls.get(object.id);
+        if (el) { el.style.width = `${image.w}px`; el.style.height = `${image.h}px`; }
+      } else if (object.kind === "textbox") {
+        const box = this.host.getTextBoxes().find((entry) => entry.id === object.id);
+        if (!box) continue;
+        box.w = Math.round(box.w);
+        box.h = Math.round(box.h);
+        const el = this.textBoxEls.get(object.id);
+        if (el) { el.style.width = `${box.w}px`; el.style.height = `${box.h}px`; }
+      } else {
+        const rating = this.host.getRatings().find((entry) => entry.id === object.id);
+        if (!rating) continue;
+        rating.scale = Math.round((rating.scale ?? 1) * 1000) / 1000;
+        const el = this.ratingEls.get(object.id);
+        if (el) el.style.transform = `scale(${rating.scale})`;
+      }
+    }
+    this.renderArrows();
+    this.updateObjectSelectionFrame();
+  }
+
   private selectedViewObjects(): ViewObject[] {
     return this.allViewObjects().filter((object) => this.selected.has(object.key));
   }
 
   private selectObject(key: string, additive: boolean): void {
+    this.selectedGroupId = null;
     const object = this.allViewObjects().find((entry) => entry.key === key);
     if (!object) return;
     const keys = object.objectGroup
@@ -1182,6 +1918,7 @@ export class WebDeskView extends ItemView {
   }
 
   private ensureObjectSelection(key: string): void {
+    this.selectedGroupId = null;
     if (!this.selected.has(key)) this.selectObject(key, false);
   }
 
@@ -1199,6 +1936,7 @@ export class WebDeskView extends ItemView {
       if (card) { card.x = x; card.y = y; }
       const el = this.iconEls.get(key);
       if (el) { el.style.left = `${x}px`; el.style.top = `${y}px`; }
+      this.positionSelectionToolbar();
       return;
     }
     const collection = parsed.kind === "image"
@@ -1213,6 +1951,52 @@ export class WebDeskView extends ItemView {
     const object = this.allViewObjects().find((entry) => entry.key === key);
     const el = object ? this.objectElement(object) : undefined;
     if (el) { el.style.left = `${x}px`; el.style.top = `${y}px`; }
+    this.positionSelectionToolbar();
+  }
+
+  private setObjectArea(key: string, areaName: string): void {
+    const parsed = splitObjectKey(key);
+    if (!parsed) {
+      const card = this.cards.find((entry) => entry.path === key);
+      if (card) card.group = areaName;
+      return;
+    }
+    if (parsed.kind === "image") {
+      const image = this.host.getImages().find((entry) => entry.id === parsed.id);
+      if (image) image.group = areaName || undefined;
+      return;
+    }
+    if (parsed.kind === "textbox") {
+      const box = this.host.getTextBoxes().find((entry) => entry.id === parsed.id);
+      if (box) box.group = areaName || undefined;
+      return;
+    }
+    if (parsed.kind === "rating") {
+      const rating = this.host.getRatings().find((entry) => entry.id === parsed.id);
+      if (rating) rating.group = areaName || undefined;
+    }
+  }
+
+  private updateAreaMembership(objects: ViewObject[]): ViewObject[] {
+    const previous = new Map(objects.map((object) => [object.key, object.group]));
+    recomputeGroupMembership(objects, this.host.getGroups());
+    const changed = objects.filter((object) => previous.get(object.key) !== object.group);
+    for (const object of changed) this.setObjectArea(object.key, object.group);
+    return changed;
+  }
+
+  private showAreaDropTargets(objects: ViewObject[]): void {
+    const targets = new Set(objects.map((object) => this.groupAt(
+      object.x + object.w / 2,
+      object.y + object.h / 2,
+    )).filter(Boolean));
+    for (const group of this.host.getGroups()) {
+      this.groupEls.get(group.id)?.toggleClass("is-drop-target", targets.has(group.name));
+    }
+  }
+
+  private clearAreaDropTargets(): void {
+    for (const el of this.groupEls.values()) el.removeClass("is-drop-target");
   }
 
   private applyObjectScale(origin: ViewObject, x: number, y: number, scale: number): void {
@@ -1220,16 +2004,20 @@ export class WebDeskView extends ItemView {
     if (origin.kind === "card") {
       const card = this.cards.find((entry) => entry.path === origin.id);
       if (!card) return;
-      card.size = clamp(Math.round((origin.w - 24) * scale), 32, 320);
+      Object.assign(card, scaleCardPlacement(card, scale, { w: origin.w, h: origin.h }));
       const el = this.iconEls.get(origin.id);
-      if (el) updateIconElementSize(el, card.size);
+      if (el) {
+        if (card.targetPath) updateFileCardFrame(el, card);
+        else updateWebCardElementFrame(el, card);
+      }
+      this.positionSelectionToolbar();
       return;
     }
     if (origin.kind === "image") {
       const image = this.host.getImages().find((entry) => entry.id === origin.id);
       if (!image) return;
-      image.w = Math.round(origin.w * scale);
-      image.h = Math.round(origin.h * scale);
+      image.w = origin.w * scale;
+      image.h = origin.h * scale;
       const el = this.imageEls.get(origin.id);
       if (el) { el.style.width = `${image.w}px`; el.style.height = `${image.h}px`; }
       return;
@@ -1237,8 +2025,8 @@ export class WebDeskView extends ItemView {
     if (origin.kind === "textbox") {
       const box = this.host.getTextBoxes().find((entry) => entry.id === origin.id);
       if (!box) return;
-      box.w = Math.round(origin.w * scale);
-      box.h = Math.round(origin.h * scale);
+      box.w = origin.w * scale;
+      box.h = origin.h * scale;
       const el = this.textBoxEls.get(origin.id);
       if (el) { el.style.width = `${box.w}px`; el.style.height = `${box.h}px`; }
       return;
@@ -1282,6 +2070,7 @@ export class WebDeskView extends ItemView {
     const origins = this.selectedViewObjects();
     const bounds = objectGroupBounds(origins);
     if (!bounds || origins.length < 2) return;
+    const snapSession = createCanvasSnapSession(this.snapTargets(new Set(origins.map((object) => object.key))));
     this.interactionLock += 1;
     beginCanvasPointerSession({
       event,
@@ -1291,15 +2080,31 @@ export class WebDeskView extends ItemView {
       onMove: (delta) => {
         const relativeX = delta.x / Math.max(bounds.w, 1);
         const relativeY = delta.y / Math.max(bounds.h, 1);
-        const requested = 1 + (Math.abs(relativeX) >= Math.abs(relativeY) ? relativeX : relativeY);
-        const result = scaleObjectGroup(origins, requested);
+        const dominantX = Math.abs(relativeX) >= Math.abs(relativeY);
+        const requested = 1 + (dominantX ? relativeX : relativeY);
+        const raw = scaleObjectGroup(origins, requested);
+        const rawBounds = objectGroupBounds(raw.objects);
+        if (!rawBounds) return;
+        const snapped = snapSession.resize(bounds, rawBounds, this.transform.zoom, {
+          x: dominantX,
+          y: !dominantX,
+        });
+        const snappedScale = dominantX ? snapped.rect.w / bounds.w : snapped.rect.h / bounds.h;
+        const result = scaleObjectGroup(origins, snappedScale);
         result.objects.forEach((object, index) => {
           this.applyObjectScale(origins[index], object.x, object.y, result.scale);
         });
+        const finalBounds = objectGroupBounds(result.objects);
+        this.snapGuideLayer?.show(
+          finalBounds ? snapGuidesMatchingRect(finalBounds, snapped.guides) : [],
+          this.transform.zoom,
+        );
         this.renderArrows();
         this.updateObjectSelectionFrame();
       },
       onEnd: (moved) => {
+        snapSession.clear();
+        this.snapGuideLayer?.hide();
         this.interactionLock -= 1;
         if (moved) void this.persistScaledObjects(this.selectedViewObjects());
       },
@@ -1317,17 +2122,28 @@ export class WebDeskView extends ItemView {
   }
 
   private async persistScaledObjects(objects: ViewObject[]): Promise<void> {
+    this.roundViewObjectGeometry(objects);
+    const keys = new Set(objects.map((object) => object.key));
+    const freshObjects = this.allViewObjects().filter((object) => keys.has(object.key));
+    this.updateAreaMembership(freshObjects);
     try {
-      for (const object of objects.filter((entry) => entry.kind === "card")) {
+      for (const object of freshObjects.filter((entry) => entry.kind === "card")) {
         const card = this.cards.find((entry) => entry.path === object.id);
         const file = this.app.vault.getAbstractFileByPath(object.id);
         if (!card || !(file instanceof TFile)) continue;
-        await writeDeskFields(this.app, file, { x: card.x, y: card.y, size: card.size });
-        this.layoutWrites.set(card.path, { x: card.x, y: card.y, size: card.size, objectGroup: card.objectGroup, at: Date.now() });
+        await writeDeskFields(this.app, file, {
+          x: card.x,
+          y: card.y,
+          size: card.size,
+          previewWidth: card.previewWidth,
+          previewHeight: card.previewHeight,
+          group: card.group || null,
+        });
+        this.recordCardLayoutWrite(card);
       }
-      if (objects.some((entry) => entry.kind === "image")) this.host.setImages(this.host.getImages());
-      if (objects.some((entry) => entry.kind === "textbox")) this.host.setTextBoxes(this.host.getTextBoxes());
-      if (objects.some((entry) => entry.kind === "rating")) this.host.setRatings(this.host.getRatings());
+      if (freshObjects.some((entry) => entry.kind === "image")) this.host.setImages(this.host.getImages());
+      if (freshObjects.some((entry) => entry.kind === "textbox")) this.host.setTextBoxes(this.host.getTextBoxes());
+      if (freshObjects.some((entry) => entry.kind === "rating")) this.host.setRatings(this.host.getRatings());
     } catch (error) {
       new Notice(`保存组合缩放失败：${getErrorMessage(error)}`, 5000);
     }
@@ -1349,7 +2165,7 @@ export class WebDeskView extends ItemView {
           if (!card || !(file instanceof TFile)) continue;
           card.objectGroup = groupId;
           await writeDeskFields(this.app, file, { objectGroup: groupId || null });
-          this.layoutWrites.set(card.path, { x: card.x, y: card.y, size: card.size, objectGroup: groupId, at: Date.now() });
+          this.recordCardLayoutWrite(card);
         } else if (object.kind === "image") {
           const image = this.host.getImages().find((entry) => entry.id === object.id);
           if (image) image.objectGroup = groupId || undefined;
@@ -1399,25 +2215,37 @@ export class WebDeskView extends ItemView {
   ): void {
     event.stopPropagation();
     this.rootEl.focus();
+    this.selectedGroupId = null;
     if (event.shiftKey) {
       this.selectObject(key, true);
       return;
     }
     this.ensureObjectSelection(key);
     const origins = this.selectedViewObjects();
-    if (origins.length === 0) return;
+    const bounds = objectGroupBounds(origins);
+    if (origins.length === 0 || !bounds) return;
+    const snapSession = createCanvasSnapSession(this.snapTargets(new Set(origins.map((object) => object.key))));
     this.interactionLock += 1;
     beginCanvasPointerSession({
       event,
       element: el,
       zoom: () => this.transform.zoom,
       onMove: (delta) => {
-        const translated = translateObjectGroup(origins, delta);
+        const snapped = snapSession.move(bounds, delta, this.transform.zoom);
+        const translated = translateObjectGroup(origins, {
+          x: snapped.rect.x - bounds.x,
+          y: snapped.rect.y - bounds.y,
+        });
         for (const object of translated) this.applyObjectPosition(object.key, object.x, object.y);
+        this.showAreaDropTargets(translated);
+        this.snapGuideLayer?.show(snapped.guides, this.transform.zoom);
         this.renderArrows();
         this.renderObjectSelection();
       },
       onEnd: (moved) => {
+        snapSession.clear();
+        this.snapGuideLayer?.hide();
+        this.clearAreaDropTargets();
         this.interactionLock -= 1;
         if (!moved) {
           activate?.();
@@ -1428,15 +2256,24 @@ export class WebDeskView extends ItemView {
     });
   }
 
-  private async persistMovedObjects(objects: ViewObject[]): Promise<void> {
-    const cards = objects
+  private async persistMovedObjects(objects: ViewObject[], recomputeAllAreas = false): Promise<void> {
+    this.roundViewObjectGeometry(objects);
+    const movedKeys = new Set(objects.map((object) => object.key));
+    const freshObjects = this.allViewObjects();
+    const membershipScope = recomputeAllAreas
+      ? freshObjects
+      : freshObjects.filter((object) => movedKeys.has(object.key));
+    const changed = this.updateAreaMembership(membershipScope);
+    const affectedKeys = new Set([...movedKeys, ...changed.map((object) => object.key)]);
+    const affected = this.allViewObjects().filter((object) => affectedKeys.has(object.key));
+    const cards = affected
       .filter((object) => object.kind === "card")
       .map((object) => this.cards.find((card) => card.path === object.id))
       .filter((card): card is BookmarkCard => Boolean(card));
     if (cards.length > 0) await this.persistDragged(cards);
-    if (objects.some((object) => object.kind === "image")) this.host.setImages(this.host.getImages());
-    if (objects.some((object) => object.kind === "textbox")) this.host.setTextBoxes(this.host.getTextBoxes());
-    if (objects.some((object) => object.kind === "rating")) this.host.setRatings(this.host.getRatings());
+    if (affected.some((object) => object.kind === "image")) this.host.setImages(this.host.getImages());
+    if (affected.some((object) => object.kind === "textbox")) this.host.setTextBoxes(this.host.getTextBoxes());
+    if (affected.some((object) => object.kind === "rating")) this.host.setRatings(this.host.getRatings());
     this.renderObjectSelection();
   }
 
@@ -1447,22 +2284,20 @@ export class WebDeskView extends ItemView {
   }
 
   private createGroupAt(point: Point): void {
-    new TextInputModal(this.app, {
-      title: "新建分组",
-      placeholder: "分组名称，如：工具 / 读文档",
-      onSubmit: (name) => {
-        const groups = this.host.getGroups();
-        const color = GROUP_COLORS[groups.length % GROUP_COLORS.length];
-        groups.push(createGroupBox({
-          id: `g${Date.now().toString(36)}`,
-          name,
-          point,
-          color,
-        }));
-        this.host.setGroups(groups);
-        this.render();
-      },
-    }).open();
+    const groups = this.host.getGroups();
+    const group = createGroupBox({
+      id: `g${Date.now().toString(36)}`,
+      name: nextAvailableGroupName(groups.map((entry) => entry.name)),
+      point,
+      color: GROUP_COLORS[groups.length % GROUP_COLORS.length],
+    });
+    groups.push(group);
+    this.editingGroupId = group.id;
+    this.selected.clear();
+    this.selectedGroupId = group.id;
+    this.host.setGroups(groups);
+    this.render();
+    void this.persistMovedObjects([], true);
   }
 
   private onGroupPointerDown(event: PointerEvent, group: GroupBox): void {
@@ -1474,6 +2309,10 @@ export class WebDeskView extends ItemView {
     }
     event.stopPropagation();
     this.rootEl.focus();
+    this.selected.clear();
+    this.selectedGroupId = group.id;
+    this.clearArrowSelection();
+    this.syncSelection();
 
     const el = this.groupEls.get(group.id);
     if (!el) {
@@ -1481,23 +2320,44 @@ export class WebDeskView extends ItemView {
     }
 
     this.interactionLock += 1;
-    const origin = { x: group.x, y: group.y };
+    const originRect = { x: group.x, y: group.y, w: group.w, h: group.h };
+    // 空间位置是区域归属的事实源；不依赖可能仍在等待 metadataCache 的 group 投影。
+    const allObjects = this.allViewObjects();
+    const memberOrigins = areaMembers(allObjects, this.host.getGroups(), group.name);
+    const memberKeys = new Set(memberOrigins.map((object) => object.key));
+    const excluded = new Set([`group:${group.id}`, ...memberKeys]);
+    const snapSession = createCanvasSnapSession(this.snapTargets(excluded));
     beginCanvasPointerSession({
       event,
       element: el,
       zoom: () => this.transform.zoom,
       onMove: (delta) => {
-        group.x = Math.round(origin.x + delta.x);
-        group.y = Math.round(origin.y + delta.y);
+        const snapped = snapSession.move(originRect, delta, this.transform.zoom);
+        group.x = snapped.rect.x;
+        group.y = snapped.rect.y;
         el.style.left = `${group.x}px`;
         el.style.top = `${group.y}px`;
+        const translated = translateObjectGroup(memberOrigins, {
+          x: snapped.rect.x - originRect.x,
+          y: snapped.rect.y - originRect.y,
+        });
+        for (const object of translated) this.applyObjectPosition(object.key, object.x, object.y);
+        this.positionSelectionToolbar();
+        this.snapGuideLayer?.show(snapped.guides, this.transform.zoom);
         this.renderArrows();
       },
       onEnd: (moved) => {
+        snapSession.clear();
+        this.snapGuideLayer?.hide();
         this.interactionLock -= 1;
         if (moved) {
+          group.x = Math.round(group.x);
+          group.y = Math.round(group.y);
+          el.style.left = `${group.x}px`;
+          el.style.top = `${group.y}px`;
           this.host.setGroups(this.host.getGroups());
-          void this.recomputeGroupMembership();
+          const members = this.allViewObjects().filter((object) => memberKeys.has(object.key));
+          void this.persistMovedObjects(members, true);
         }
       },
     });
@@ -1516,23 +2376,40 @@ export class WebDeskView extends ItemView {
 
     this.interactionLock += 1;
     const origin = { w: group.w, h: group.h };
+    const originRect = { x: group.x, y: group.y, w: group.w, h: group.h };
+    const snapSession = createCanvasSnapSession(this.snapTargets(new Set([`group:${group.id}`])));
     beginCanvasPointerSession({
       event,
       element: el,
       zoom: () => this.transform.zoom,
       resizing: true,
       onMove: (delta) => {
-        group.w = Math.max(240, Math.round(origin.w + delta.x));
-        group.h = Math.max(180, Math.round(origin.h + delta.y));
+        const snapped = snapSession.resize(originRect, {
+          ...originRect,
+          w: Math.max(240, origin.w + delta.x),
+          h: Math.max(180, origin.h + delta.y),
+        }, this.transform.zoom);
+        group.w = Math.max(240, snapped.rect.w);
+        group.h = Math.max(180, snapped.rect.h);
         el.style.width = `${group.w}px`;
         el.style.height = `${group.h}px`;
+        this.snapGuideLayer?.show(
+          snapGuidesMatchingRect({ x: group.x, y: group.y, w: group.w, h: group.h }, snapped.guides),
+          this.transform.zoom,
+        );
         this.renderArrows();
       },
       onEnd: (moved) => {
+        snapSession.clear();
+        this.snapGuideLayer?.hide();
         this.interactionLock -= 1;
         if (moved) {
+          group.w = Math.round(group.w);
+          group.h = Math.round(group.h);
+          el.style.width = `${group.w}px`;
+          el.style.height = `${group.h}px`;
           this.host.setGroups(this.host.getGroups());
-          void this.recomputeGroupMembership();
+          void this.persistMovedObjects([], true);
         }
       },
     });
@@ -1544,7 +2421,7 @@ export class WebDeskView extends ItemView {
     const menu = new Menu();
     menu.addItem((item) =>
       item
-        .setTitle("重命名")
+        .setTitle("重命名区域")
         .setIcon("pencil")
         .onClick(() => this.renameGroup(group)),
     );
@@ -1555,20 +2432,15 @@ export class WebDeskView extends ItemView {
         .onClick(() => this.beginArrowDraft({ kind: "group", ref: group.id })),
     );
 
-    menu.addItem((item) =>
-      item
-        .setTitle("换颜色")
-        .setIcon("palette")
-        .onClick(() => {
-          group.color = cycleColor(GROUP_COLORS, group.color);
-          this.host.setGroups(this.host.getGroups());
-          this.render();
-        }),
-    );
+    menu.addSeparator();
+    appendCanvasContainerAppearanceMenuItems(this.app, menu, group, () => {
+      this.host.setGroups(this.host.getGroups());
+      this.render();
+    });
     menu.addSeparator();
     menu.addItem((item) =>
       item
-        .setTitle("删除分组")
+        .setTitle("删除区域（保留元素）")
         .setIcon("trash-2")
         .onClick(() => {
           const groups = this.host.getGroups().filter((entry) => entry.id !== group.id);
@@ -1584,13 +2456,23 @@ export class WebDeskView extends ItemView {
   }
 
   private renameGroup(group: GroupBox): void {
-    new TextInputModal(this.app, {
-      title: "重命名分组",
+    const header = this.groupEls.get(group.id)?.querySelector<HTMLElement>(".web-desk-group-header");
+    if (header) this.editGroupName(group, header);
+  }
+
+  private editGroupName(group: GroupBox, header: HTMLElement): void {
+    if (this.editingGroupId && this.editingGroupId !== group.id) return;
+    this.editingGroupId = group.id;
+    beginInlineGroupNameEdit(header, {
       initial: group.name,
-      onSubmit: (name) => {
-        void this.applyGroupRename(group, name);
+      onCommit: (name) => {
+        this.editingGroupId = null;
+        if (name !== group.name) void this.applyGroupRename(group, name);
       },
-    }).open();
+      onCancel: () => {
+        this.editingGroupId = null;
+      },
+    });
   }
 
   private async applyGroupRename(group: GroupBox, name: string): Promise<void> {
@@ -1603,6 +2485,9 @@ export class WebDeskView extends ItemView {
     }
     this.interactionLock += 1;
     try {
+      renameGroupMembership(this.host.getImages(), oldName, name);
+      renameGroupMembership(this.host.getTextBoxes(), oldName, name);
+      renameGroupMembership(this.host.getRatings(), oldName, name);
       for (const card of this.cards) {
         if (card.group === oldName) {
           card.group = name;
@@ -1612,37 +2497,21 @@ export class WebDeskView extends ItemView {
           }
         }
       }
+      this.host.setImages(this.host.getImages());
+      this.host.setTextBoxes(this.host.getTextBoxes());
+      this.host.setRatings(this.host.getRatings());
     } finally {
       this.interactionLock -= 1;
     }
     this.render();
   }
 
-  /** 框移动/改大小后，按「图标中心是否在框内」重算归属。 */
-  private async recomputeGroupMembership(): Promise<void> {
-    this.interactionLock += 1;
-    try {
-      for (const card of this.cards) {
-        const group = this.groupAt(
-          card.x + (card.size + 24) / 2,
-          card.y + (card.size + 44) / 2,
-        );
-        if (group !== card.group) {
-          card.group = group;
-          const file = this.app.vault.getAbstractFileByPath(card.path);
-          if (file instanceof TFile) {
-            await writeDeskFields(this.app, file, { group: group || null });
-          }
-        }
-      }
-    } finally {
-      this.interactionLock -= 1;
-    }
-  }
-
   private async clearGroupMembership(groupName: string): Promise<void> {
     this.interactionLock += 1;
     try {
+      clearGroupMembership(this.host.getImages(), groupName);
+      clearGroupMembership(this.host.getTextBoxes(), groupName);
+      clearGroupMembership(this.host.getRatings(), groupName);
       for (const card of this.cards) {
         if (card.group === groupName) {
           card.group = "";
@@ -1652,6 +2521,9 @@ export class WebDeskView extends ItemView {
           }
         }
       }
+      this.host.setImages(this.host.getImages());
+      this.host.setTextBoxes(this.host.getTextBoxes());
+      this.host.setRatings(this.host.getRatings());
     } finally {
       this.interactionLock -= 1;
     }
@@ -1701,14 +2573,17 @@ export class WebDeskView extends ItemView {
 
   private endpointScene() {
     return {
-      cards: this.cards.map((card) => ({
-        ref: card.path,
-        x: card.x,
-        y: card.y,
-        w: card.size + 24,
-        h: card.size + 44,
-        group: card.group,
-      })),
+      cards: this.cards.map((card) => {
+        const frame = cardPlacementFrame(card);
+        return {
+          ref: card.path,
+          x: card.x,
+          y: card.y,
+          w: frame.w,
+          h: frame.h,
+          group: card.group,
+        };
+      }),
       textboxes: this.host.getTextBoxes(),
       groups: this.host.getGroups(),
     };
@@ -1741,7 +2616,9 @@ export class WebDeskView extends ItemView {
       path.setAttribute("d", d);
       path.setAttribute(
         "class",
-        arrow.id === this.selectedArrowId ? "web-desk-arrow is-selected" : "web-desk-arrow",
+        arrow.id === this.selectedArrowId || this.selected.has(`arrow:${arrow.id}`)
+          ? "web-desk-arrow is-selected"
+          : "web-desk-arrow",
       );
       path.style.stroke = arrow.color || "var(--interactive-accent)";
       path.setAttribute("marker-end", `url(#${this.arrowMarkerIds.get(arrow.color) ?? "wd-arrow-accent"})`);
@@ -1770,8 +2647,9 @@ export class WebDeskView extends ItemView {
     event.stopPropagation();
     this.selectedArrowId = this.selectedArrowId === arrow.id ? null : arrow.id;
     this.selected.clear();
-    this.syncSelection();
+    this.selectedGroupId = null;
     this.renderArrows();
+    this.syncSelection();
   }
 
   private onArrowContextMenu(event: MouseEvent, arrow: Arrow): void {
@@ -1779,6 +2657,7 @@ export class WebDeskView extends ItemView {
     event.stopPropagation();
     this.selectedArrowId = arrow.id;
     this.renderArrows();
+    this.renderSelectionToolbar();
 
     const menu = new Menu();
     menu.addItem((item) =>
@@ -1825,6 +2704,31 @@ export class WebDeskView extends ItemView {
     menu.showAtMouseEvent(event);
   }
 
+  private editArrowLabel(arrow: Arrow): void {
+    new TextInputModal(this.app, {
+      title: "箭头标签",
+      initial: arrow.label,
+      onSubmit: (value) => {
+        arrow.label = value;
+        this.host.setArrows(this.host.getArrows());
+        this.renderArrows();
+      },
+    }).open();
+  }
+
+  private cycleArrowColor(arrow: Arrow): void {
+    arrow.color = cycleColor(GROUP_COLORS, arrow.color);
+    this.host.setArrows(this.host.getArrows());
+    this.renderArrows();
+  }
+
+  private showArrowMoreMenu(arrow: Arrow, trigger: HTMLElement): void {
+    const menu = new Menu();
+    menu.addItem((item) => item.setTitle("删除箭头").setIcon("trash-2").onClick(() => this.removeArrow(arrow.id)));
+    const rect = trigger.getBoundingClientRect();
+    menu.setParentElement(this.rootEl).setUseNativeMenu(false).showAtPosition({ x: rect.left, y: rect.bottom + 6 }, trigger.ownerDocument);
+  }
+
   private renderTextBoxes(): void {
     for (const box of this.host.getTextBoxes()) {
       const el = this.canvasEl.createDiv({ cls: "web-desk-textbox" });
@@ -1833,9 +2737,11 @@ export class WebDeskView extends ItemView {
       el.style.top = `${box.y}px`;
       el.style.width = `${box.w}px`;
       el.style.height = `${box.h}px`;
-      el.style.borderColor = box.color;
-      el.style.backgroundColor = hexToRgba(box.color, 0.08);
+      applyCanvasContainerAppearance(el, box);
       el.setAttribute("data-tb-id", box.id);
+      el.setAttribute("role", "button");
+      el.setAttribute("aria-label", `文本框：${box.text}`);
+      el.tabIndex = 0;
 
       const text = el.createDiv({ cls: "web-desk-textbox-text", text: box.text });
       const handle = el.createDiv({ cls: "web-desk-textbox-resize" });
@@ -1844,6 +2750,12 @@ export class WebDeskView extends ItemView {
       el.addEventListener("dblclick", (event) => {
         event.stopPropagation();
         this.editTextBox(box, text);
+      });
+      el.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === "F2") {
+          event.preventDefault();
+          this.editTextBox(box, text);
+        }
       });
       el.addEventListener("contextmenu", (event) => {
         event.preventDefault();
@@ -1875,6 +2787,9 @@ export class WebDeskView extends ItemView {
       el.style.transform = `scale(${rating.scale ?? 1})`;
       el.style.transformOrigin = "top left";
       el.setAttribute("data-rating-id", rating.id);
+      el.setAttribute("role", "group");
+      el.setAttribute("aria-label", `${rating.link?.title ?? "独立评分"}：${rating.value || "未评分"}`);
+      el.tabIndex = 0;
 
       const header = el.createDiv({ cls: "web-desk-rating-header" });
       header.createSpan({
@@ -1909,6 +2824,7 @@ export class WebDeskView extends ItemView {
       }
 
       el.addEventListener("pointerdown", (event) => this.onRatingPointerDown(event, rating, el));
+      el.addEventListener("focus", () => this.ensureObjectSelection(objectKey("rating", rating.id)));
       el.addEventListener("contextmenu", (event) => this.onRatingContextMenu(event, rating));
       this.ratingEls.set(rating.id, el);
     }
@@ -1979,6 +2895,8 @@ export class WebDeskView extends ItemView {
       el.style.height = `${image.h}px`;
       el.setAttribute("data-image-id", image.id);
       el.setAttribute("aria-label", image.path);
+      el.setAttribute("role", "button");
+      el.tabIndex = 0;
 
       const resource = imageResourceUrl(this.app, image.path);
       if (resource) {
@@ -1993,6 +2911,11 @@ export class WebDeskView extends ItemView {
       const handle = el.createDiv({ cls: "web-desk-image-resize" });
       el.addEventListener("pointerdown", (event) => this.onImagePointerDown(event, image, el));
       el.addEventListener("contextmenu", (event) => this.onImageContextMenu(event, image));
+      el.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
+        const file = this.app.vault.getAbstractFileByPath(image.path);
+        if (file instanceof TFile) void this.app.workspace.getLeaf("tab").openFile(file);
+      });
       handle.addEventListener("pointerdown", (event) =>
         this.onImageResizePointerDown(event, image, el),
       );
@@ -2014,37 +2937,48 @@ export class WebDeskView extends ItemView {
     event.preventDefault();
     event.stopPropagation();
     this.interactionLock += 1;
-    el.addClass("is-resizing");
-    const start = { x: event.clientX, y: event.clientY };
     const origin = { w: image.w, h: image.h };
-    let moved = false;
-    try { el.setPointerCapture(event.pointerId); } catch {}
-
-    const onMove = (moveEvent: PointerEvent): void => {
-      const dx = (moveEvent.clientX - start.x) / this.transform.zoom;
-      const dy = (moveEvent.clientY - start.y) / this.transform.zoom;
-      if (!moved && Math.hypot(dx, dy) * this.transform.zoom < 4) return;
-      moved = true;
-      const widthDelta = Math.abs(dx) >= Math.abs(dy * (origin.w / origin.h))
-        ? dx
-        : dy * (origin.w / origin.h);
-      const size = resizeImageToWidth(origin, origin.w + widthDelta);
-      image.w = size.w;
-      image.h = size.h;
-      el.style.width = `${image.w}px`;
-      el.style.height = `${image.h}px`;
-    };
-    const onUp = (): void => {
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
-      el.removeEventListener("pointercancel", onUp);
-      el.removeClass("is-resizing");
-      this.interactionLock -= 1;
-      if (moved) this.host.setImages(this.host.getImages());
-    };
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
-    el.addEventListener("pointercancel", onUp);
+    const originRect = { x: image.x, y: image.y, w: image.w, h: image.h };
+    const snapSession = createCanvasSnapSession(this.snapTargets(new Set([objectKey("image", image.id)])));
+    beginCanvasPointerSession({
+      event,
+      element: el,
+      zoom: () => this.transform.zoom,
+      resizing: true,
+      onMove: ({ x: dx, y: dy }) => {
+        const widthDelta = Math.abs(dx) >= Math.abs(dy * (origin.w / origin.h))
+          ? dx
+          : dy * (origin.w / origin.h);
+        const dominantX = Math.abs(dx) >= Math.abs(dy * (origin.w / origin.h));
+        const raw = resizeImageToWidth(origin, origin.w + widthDelta);
+        const snapped = snapSession.resize(originRect, { ...originRect, ...raw }, this.transform.zoom, {
+          x: dominantX,
+          y: !dominantX,
+        });
+        const requestedWidth = dominantX
+          ? snapped.rect.w
+          : snapped.rect.h * (origin.w / origin.h);
+        const size = resizeImageToWidth(origin, requestedWidth);
+        image.w = size.w;
+        image.h = size.h;
+        el.style.width = `${image.w}px`;
+        el.style.height = `${image.h}px`;
+        this.snapGuideLayer?.show(
+          snapGuidesMatchingRect({ x: image.x, y: image.y, w: image.w, h: image.h }, snapped.guides),
+          this.transform.zoom,
+        );
+        this.renderArrows();
+      },
+      onEnd: (moved) => {
+        snapSession.clear();
+        this.snapGuideLayer?.hide();
+        this.interactionLock -= 1;
+        if (moved) {
+          const object = this.allViewObjects().filter((entry) => entry.key === objectKey("image", image.id));
+          void this.persistMovedObjects(object);
+        }
+      },
+    });
   }
 
   private onImageContextMenu(event: MouseEvent, image: CanvasImage): void {
@@ -2091,21 +3025,37 @@ export class WebDeskView extends ItemView {
 
     this.interactionLock += 1;
     const origin = { w: box.w, h: box.h };
+    const originRect = { x: box.x, y: box.y, w: box.w, h: box.h };
+    const snapSession = createCanvasSnapSession(this.snapTargets(new Set([objectKey("textbox", box.id)])));
     beginCanvasPointerSession({
       event,
       element: el,
       zoom: () => this.transform.zoom,
       resizing: true,
       onMove: (delta) => {
-        box.w = Math.max(140, Math.round(origin.w + delta.x));
-        box.h = Math.max(60, Math.round(origin.h + delta.y));
+        const snapped = snapSession.resize(originRect, {
+          ...originRect,
+          w: Math.max(140, origin.w + delta.x),
+          h: Math.max(60, origin.h + delta.y),
+        }, this.transform.zoom);
+        box.w = Math.max(140, snapped.rect.w);
+        box.h = Math.max(60, snapped.rect.h);
         el.style.width = `${box.w}px`;
         el.style.height = `${box.h}px`;
+        this.snapGuideLayer?.show(
+          snapGuidesMatchingRect({ x: box.x, y: box.y, w: box.w, h: box.h }, snapped.guides),
+          this.transform.zoom,
+        );
         this.renderArrows();
       },
       onEnd: (moved) => {
+        snapSession.clear();
+        this.snapGuideLayer?.hide();
         this.interactionLock -= 1;
-        if (moved) this.host.setTextBoxes(this.host.getTextBoxes());
+        if (moved) {
+          const object = this.allViewObjects().filter((entry) => entry.key === objectKey("textbox", box.id));
+          void this.persistMovedObjects(object);
+        }
       },
     });
   }
@@ -2157,20 +3107,11 @@ export class WebDeskView extends ItemView {
         .setIcon("pencil")
         .onClick(() => this.editTextBox(box, textEl)),
     );
-    menu.addItem((item) =>
-      item
-        .setTitle("换颜色")
-        .setIcon("palette")
-        .onClick(() => {
-          const boxes = this.host.getTextBoxes();
-          const target = boxes.find((entry) => entry.id === box.id);
-          if (target) {
-            target.color = cycleColor(GROUP_COLORS, target.color);
-            this.host.setTextBoxes(boxes);
-          }
-          this.render();
-        }),
-    );
+    menu.addSeparator();
+    appendCanvasContainerAppearanceMenuItems(this.app, menu, box, () => {
+      this.host.setTextBoxes(this.host.getTextBoxes());
+      this.render();
+    });
     menu.addItem((item) =>
       item
         .setTitle("从这里画箭头")
@@ -2339,7 +3280,7 @@ export class WebDeskView extends ItemView {
       return;
     }
     if (hasLocalMarkdownFileDrop(event.dataTransfer)) {
-      new Notice("这个 Markdown 不在当前 Vault 中；请先移入 Vault 再拖到画布");
+      new Notice("这个 Markdown/PDF 不在当前 Vault 中；请先移入 Vault 再拖到画布");
       return;
     }
     const text =
@@ -2375,14 +3316,15 @@ export class WebDeskView extends ItemView {
           y: point.y + index * 32,
         };
         const result = await createMarkdownShortcut(this.app, this.settings, target, dropPoint);
-        if (result.created) {
-          this.layoutWrites.set(result.file.path, {
-            x: Math.round(dropPoint.x - this.settings.defaultIconSize / 2),
-            y: Math.round(dropPoint.y - this.settings.defaultIconSize / 2),
-            size: this.settings.defaultIconSize,
-            at: Date.now(),
-          });
-        }
+        const x = Math.round(dropPoint.x - this.settings.defaultIconSize / 2);
+        const y = Math.round(dropPoint.y - this.settings.defaultIconSize / 2);
+        await writeDeskFields(this.app, result.file, {
+          x, y, size: this.settings.defaultIconSize, hidden: null,
+        });
+        this.hiddenWrites.delete(result.file.path);
+        this.layoutWrites.set(result.file.path, {
+          x, y, size: this.settings.defaultIconSize, at: Date.now(),
+        });
         new Notice(result.created ? `已创建文件卡片：${target.basename}` : `${target.basename} 已经在画布上了`);
       }
     } catch (error) {
@@ -2460,24 +3402,59 @@ export class WebDeskView extends ItemView {
           continue;
         }
 
-        new Notice(`正在抓取：${rawUrl}`);
         const x = point.x + index * 40 - this.settings.defaultIconSize / 2;
         const y = point.y + index * 40 - this.settings.defaultIconSize / 2;
+        const pending: PendingWebCard = {
+          id: `p${Date.now().toString(36)}${index}`,
+          url: rawUrl,
+          x,
+          y,
+          state: "loading",
+        };
+        this.pendingImports.set(pending.id, pending);
+        this.render();
         try {
           const result = await importUrlAsBookmark(this.app, this.settings, rawUrl, {
             x,
             y,
             size: this.settings.defaultIconSize,
           });
+          await writeDeskFields(this.app, result.file, {
+            x, y, size: this.settings.defaultIconSize, hidden: null,
+          });
+          this.hiddenWrites.delete(result.file.path);
+          this.layoutWrites.set(result.file.path, {
+            x, y, size: this.settings.defaultIconSize, at: Date.now(),
+          });
+          this.pendingImports.delete(pending.id);
           new Notice(`已收藏：${result.file.basename}`);
         } catch (error) {
-          new Notice(`收藏失败：${getErrorMessage(error)}`, 8000);
+          pending.state = "error";
+          pending.message = getErrorMessage(error);
+          this.render();
         }
       }
     } finally {
       this.interactionLock -= 1;
     }
     await this.refresh();
+  }
+
+  private retryPendingImport(id: string): void {
+    const pending = this.pendingImports.get(id);
+    if (!pending) return;
+    this.pendingImports.delete(id);
+    if (pending.purpose === "embed") {
+      const card = this.cards.find((entry) => entry.path === id.slice("embed:".length));
+      if (card) void this.setCardViewMode(card, "embed", true);
+      return;
+    }
+    void this.importUrls([pending.url], { x: pending.x + 48, y: pending.y + 48 });
+  }
+
+  private dismissPendingImport(id: string): void {
+    this.pendingImports.delete(id);
+    this.render();
   }
 
   private promptForUrl(point: Point): void {
@@ -2498,7 +3475,8 @@ export class WebDeskView extends ItemView {
 
   private visibleCenter(): Point {
     const rect = this.rootEl.getBoundingClientRect();
-    return this.clientToCanvas(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    const viewport = canvasSafeViewport(rect.width, rect.height);
+    return this.clientToCanvas(rect.left + viewport.centerX, rect.top + viewport.centerY);
   }
 
   /** 供插件命令调用：设置变更等外部原因触发的刷新。 */
@@ -2511,19 +3489,8 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function updateIconElementSize(el: HTMLElement, size: number): void {
-  el.style.width = `${size + 24}px`;
-  const thumb = el.querySelector<HTMLElement>(".web-desk-icon-thumb");
-  if (thumb) {
-    thumb.style.width = `${size}px`;
-    thumb.style.height = `${size}px`;
-  }
-  const label = el.querySelector<HTMLElement>(".web-desk-icon-label");
-  if (label) label.style.width = `${size + 24}px`;
-  const letter = el.querySelector<HTMLElement>(".web-desk-icon-letter");
-  if (letter) letter.style.fontSize = `${Math.round(size * 0.42)}px`;
-  const handle = el.querySelector<HTMLElement>(".web-desk-icon-resize");
-  if (handle) handle.style.top = `${size - 4}px`;
+function cardStyleLabel(style: CardStyle): string {
+  return style === "visual" ? "视觉" : style === "compact" ? "紧凑" : "文章";
 }
 
 interface Rect {
@@ -2544,16 +3511,4 @@ function normalizeRect(a: Point, b: Point): Rect {
 
 function rectsIntersect(a: Rect, b: Rect): boolean {
   return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
-}
-
-function hexToRgba(hex: string, alpha: number): string {
-  const match = hex.match(/^#?([0-9a-f]{6})$/i);
-  if (!match) {
-    return `rgba(127,127,127,${alpha})`;
-  }
-  const value = Number.parseInt(match[1], 16);
-  const r = (value >> 16) & 0xff;
-  const g = (value >> 8) & 0xff;
-  const b = value & 0xff;
-  return `rgba(${r},${g},${b},${alpha})`;
 }
