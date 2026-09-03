@@ -62,7 +62,7 @@ export function updateFileCardFrame(el: HTMLElement, card: CardPlacement): void 
   const label = el.querySelector<HTMLElement>(".web-desk-icon-label");
   if (label && mode === "icon") label.style.width = `${frame.w}px`;
   const handle = el.querySelector<HTMLElement>(".web-desk-icon-resize");
-  if (handle) handle.style.top = `${mode === "icon" ? card.size - 4 : frame.h - 12}px`;
+  if (handle) handle.style.top = `${mode === "icon" ? card.size - 1 : frame.h - 5}px`;
 }
 
 export function openCanvasFilePreview(

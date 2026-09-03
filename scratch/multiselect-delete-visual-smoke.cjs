@@ -206,7 +206,7 @@ function assertAllSelected(state, surface) {
     const main = page.locator(".web-desk-root:visible").last();
     await main.locator(".web-desk-icon").waitFor({ state: "visible", timeout: 30_000 });
     if (!AREA_NEW_PROBE || AREA_NEW_FIT_PROBE) {
-      await main.locator(".web-desk-toolbar .web-desk-tool-btn", { hasText: "适应" }).click();
+      await main.locator(".web-desk-toolbar .web-desk-tool-btn", [aria-label="适应内容"]).click();
     }
     if (process.env.WEB_DESK_AREA_PROBE === "1") {
       const area = main.locator(".web-desk-group").first();
@@ -331,7 +331,7 @@ function assertAllSelected(state, surface) {
     });
     const embed = page.locator(".web-desk-embed:visible").last();
     await embed.locator(".web-desk-icon").waitFor({ state: "visible", timeout: 30_000 });
-    await embed.locator(".web-desk-toolbar .web-desk-tool-btn", { hasText: "适应" }).click();
+    await embed.locator(".web-desk-toolbar .web-desk-tool-btn", [aria-label="适应内容"]).click();
     await marqueeAll(page, embed, true);
     const embedSelected = await selectionState(embed);
     assertAllSelected(embedSelected, "embed");

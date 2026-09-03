@@ -4,6 +4,7 @@ import type { CardViewMode } from "./card-view-state";
 import { cardPlacementFrame, normalizeCardViewMode } from "./card-view-state";
 import type { CardStyle } from "./canvas-ui-state";
 import { findFreePosition } from "./canvas-free-position";
+import { RATING_HEIGHT, RATING_WIDTH } from "./rating-state";
 
 export interface EmbedItem {
   url: string;
@@ -69,7 +70,7 @@ export function findAvailableEmbedRatingPosition(
   data: EmbedData,
   desired: { x: number; y: number },
 ): { x: number; y: number } {
-  return findAvailableEmbedPosition(data, desired, 208, 86, 240);
+  return findAvailableEmbedPosition(data, desired, RATING_WIDTH, RATING_HEIGHT, RATING_WIDTH + 32);
 }
 
 function findAvailableEmbedPosition(
@@ -90,7 +91,7 @@ function findAvailableEmbedPosition(
     }),
     ...(data.images ?? []).map((image) => ({ x: image.x, y: image.y, w: image.w, h: image.h })),
     ...(data.textboxes ?? []).map((box) => ({ x: box.x, y: box.y, w: box.w, h: box.h })),
-    ...(data.ratings ?? []).map((rating) => ({ x: rating.x, y: rating.y, w: 208, h: 86 })),
+    ...(data.ratings ?? []).map((rating) => ({ x: rating.x, y: rating.y, w: RATING_WIDTH, h: RATING_HEIGHT })),
   ];
   return findFreePosition(occupied, desired, { w: width, h: height }, { step });
 }

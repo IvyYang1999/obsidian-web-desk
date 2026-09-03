@@ -64,7 +64,8 @@ export function updateWebCardElementFrame(el: HTMLElement, card: CardPlacement):
   const letter = el.querySelector<HTMLElement>(".web-desk-icon-letter");
   if (letter && mode === "icon") letter.style.fontSize = `${Math.round(card.size * 0.42)}px`;
   const handle = el.querySelector<HTMLElement>(".web-desk-icon-resize");
-  if (handle) handle.style.top = `${mode !== "icon" ? frame.h - 12 : card.size - 4}px`;
+  // 圆点手柄中心落在缩略图/卡片右下角（图标外层有 4px 内边距）。
+  if (handle) handle.style.top = `${mode !== "icon" ? frame.h - 5 : card.size - 1}px`;
 }
 
 function renderIconCard(el: HTMLElement, card: WebCardVisualModel): void {
@@ -116,9 +117,12 @@ function renderPreviewCard(el: HTMLElement, card: WebCardVisualModel): void {
     });
     image.addEventListener("error", () => {
       image.remove();
+      surface.addClass("has-fallback");
       appendPreviewFallback(media, card);
     });
   } else {
+    // 没有封面时封面区收窄，让标题和摘要成为主体，而不是一大块占位色。
+    surface.addClass("has-fallback");
     appendPreviewFallback(media, card);
   }
 

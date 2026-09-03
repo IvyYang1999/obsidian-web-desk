@@ -5,19 +5,35 @@
 .web-desk-card-properties,
 .web-desk-color-picker,
 .web-desk-modal-buttons {
-  --wd-surface: var(--background-secondary);
+  /* L1 内容对象的表面：白底 + 细边，几乎无阴影；L2 浮层才有明显投影。 */
+  --wd-surface: var(--background-primary);
+  --wd-surface-float: color-mix(in srgb, var(--background-primary) 94%, transparent);
   --wd-border-color: var(--background-modifier-border);
+  --wd-border-strong: color-mix(in srgb, var(--background-modifier-border) 60%, var(--text-faint));
   --wd-radius-sm: 6px;
   --wd-radius-md: 10px;
-  --wd-radius-lg: 14px;
+  --wd-radius-lg: 12px;
   --wd-space-1: 4px;
   --wd-space-2: 8px;
   --wd-space-3: 12px;
   --wd-control-compact: 32px;
-  --wd-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.18);
-  --wd-shadow-md: 0 4px 14px rgba(0, 0, 0, 0.24);
+  --wd-shadow-object: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --wd-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.10);
+  --wd-shadow-float: 0 6px 20px rgba(0, 0, 0, 0.14), 0 1px 2px rgba(0, 0, 0, 0.06);
+  /* 旧名保留给尚未迁移的规则，语义同上。 */
+  --wd-shadow-sm: var(--wd-shadow-object);
+  --wd-shadow-md: var(--wd-shadow-hover);
   --wd-motion-fast: 120ms ease;
   --wd-rating-active: var(--color-yellow, #d8a928);
+  --wd-selection-ring: 0 0 0 2px var(--interactive-accent);
+}
+
+.theme-dark .web-desk-view,
+.theme-dark .web-desk-embed-host,
+.theme-dark .web-desk-embed {
+  --wd-shadow-object: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --wd-shadow-hover: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --wd-shadow-float: 0 8px 24px rgba(0, 0, 0, 0.55), 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 
 .web-desk-view {
@@ -31,7 +47,7 @@
   overflow: hidden;
   background-color: var(--background-primary);
   background-image:
-    radial-gradient(circle, var(--wd-border-color) 1px, transparent 1px);
+    radial-gradient(circle, color-mix(in srgb, var(--wd-border-color) 80%, transparent) 1px, transparent 1px);
   background-size: 24px 24px;
   outline: none;
   user-select: none;
@@ -113,7 +129,7 @@
   background-color: var(--wd-surface);
   border: 1px solid var(--wd-border-color);
   border-radius: var(--wd-radius-lg);
-  box-shadow: var(--wd-shadow-sm);
+  box-shadow: var(--wd-shadow-object);
   overflow: hidden;
   transition: box-shadow var(--wd-motion-fast), border-color var(--wd-motion-fast);
 }
@@ -126,68 +142,76 @@
   align-items: center;
   justify-content: center;
   color: var(--text-normal);
-  background: color-mix(in srgb, var(--background-primary) 88%, transparent);
-  border: 1px solid var(--wd-border-color);
-  box-shadow: var(--wd-shadow-sm);
+  background: color-mix(in srgb, var(--background-primary) 92%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--wd-border-color) 70%, transparent);
   pointer-events: none;
 }
 
 .web-desk-card-rating-badge {
-  top: var(--wd-space-2);
-  right: var(--wd-space-2);
-  min-width: 28px;
-  height: 22px;
-  padding: 0 6px;
+  top: 6px;
+  right: 6px;
+  height: 18px;
+  padding: 0 5px 0 4px;
   border-radius: 999px;
   color: var(--wd-rating-active);
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
 }
 
 .web-desk-card-note-badge {
-  right: var(--wd-space-2);
-  bottom: var(--wd-space-2);
-  width: 24px;
-  height: 24px;
-  border-radius: var(--wd-radius-sm);
+  right: 6px;
+  bottom: 6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity var(--wd-motion-fast);
+}
+
+.web-desk-icon:hover .web-desk-card-note-badge,
+.web-desk-icon.is-selected .web-desk-card-note-badge,
+.web-desk-icon:focus-within .web-desk-card-note-badge {
+  opacity: 1;
 }
 
 .web-desk-card-note-badge svg {
-  width: 14px;
-  height: 14px;
+  width: 11px;
+  height: 11px;
 }
 
+/* hover 只提升边框和一点阴影；选中是 2px accent 描边，不叠加大阴影。 */
 .web-desk-icon:hover .web-desk-icon-thumb {
-  border-color: var(--interactive-accent);
-  box-shadow: var(--wd-shadow-md);
+  border-color: var(--wd-border-strong);
+  box-shadow: var(--wd-shadow-hover);
 }
 
-.web-desk-icon.is-selected .web-desk-icon-thumb {
-  border-color: var(--interactive-accent);
-  box-shadow: 0 0 0 3px var(--interactive-accent-hover), var(--wd-shadow-md);
-}
-
+.web-desk-icon.is-selected .web-desk-icon-thumb,
 .web-desk-icon:focus-visible .web-desk-icon-thumb {
   border-color: var(--interactive-accent);
-  box-shadow: 0 0 0 2px var(--interactive-accent), var(--wd-shadow-md);
+  box-shadow: var(--wd-selection-ring), var(--wd-shadow-object);
 }
 
 .web-desk-image.is-selected .web-desk-image-content,
 .web-desk-image.is-selected .web-desk-image-missing,
 .web-desk-rating.is-selected {
   border-color: var(--interactive-accent);
-  box-shadow: 0 0 0 2px var(--interactive-accent-hover), var(--wd-shadow-md);
+  box-shadow: var(--wd-selection-ring), var(--wd-shadow-object);
 }
 
 .web-desk-textbox.is-selected {
   border-color: var(--interactive-accent);
-  box-shadow: none;
+  box-shadow: var(--wd-selection-ring);
 }
 
+/* 方形不透明的站点图标（Figma、X、Raycast）在瓦片里像贴纸；给图标本身圆角，读作 App 图标。 */
 .web-desk-icon-img {
-  width: 62%;
-  height: 62%;
+  width: 72%;
+  height: 72%;
   object-fit: contain;
+  border-radius: 16%;
   pointer-events: none;
 }
 
@@ -614,13 +638,17 @@ body.mod-macos .web-desk-embed.is-fullscreen > .web-desk-drilldown {
 }
 
 .web-desk-icon.is-preview:hover .web-desk-file-preview-card,
+.web-desk-icon.is-embed:hover .web-desk-file-embed {
+  border-color: var(--wd-border-strong);
+  box-shadow: var(--wd-shadow-hover);
+}
+
 .web-desk-icon.is-preview:focus-visible .web-desk-file-preview-card,
 .web-desk-icon.is-preview.is-selected .web-desk-file-preview-card,
-.web-desk-icon.is-embed:hover .web-desk-file-embed,
 .web-desk-icon.is-embed:focus-visible .web-desk-file-embed,
 .web-desk-icon.is-embed.is-selected .web-desk-file-embed {
   border-color: var(--interactive-accent);
-  box-shadow: 0 0 0 2px var(--interactive-accent-hover), var(--wd-shadow-md);
+  box-shadow: var(--wd-selection-ring), var(--wd-shadow-object);
 }
 
 /* 全屏阅读器直接挂到 body；在此自带 token，避免依赖画布 DOM 祖先。 */
@@ -752,7 +780,7 @@ body.mod-macos .web-desk-file-fullscreen {
   justify-content: center;
   color: #ffffff;
   font-weight: 700;
-  border-radius: var(--wd-radius-lg);
+  border-radius: inherit;
   pointer-events: none;
 }
 
@@ -789,10 +817,15 @@ body.mod-macos .web-desk-file-fullscreen {
   border: 1px solid var(--wd-border-color);
   border-radius: inherit;
   background: var(--background-primary);
-  box-shadow: var(--wd-shadow-sm);
+  box-shadow: var(--wd-shadow-object);
   color: var(--text-normal);
   transition: border-color var(--wd-motion-fast), box-shadow var(--wd-motion-fast);
   pointer-events: none;
+}
+
+/* 没有封面时封面区只留一条站点色带，标题和摘要成为主体。 */
+.web-desk-preview-card.has-fallback:not(.is-visual):not(.is-compact) {
+  grid-template-rows: minmax(56px, 28%) minmax(0, 1fr);
 }
 
 .web-desk-preview-media {
@@ -819,23 +852,25 @@ body.mod-macos .web-desk-file-fullscreen {
   justify-content: center;
   width: 100%;
   height: 100%;
-  background: color-mix(in srgb, var(--background-secondary) 82%, var(--interactive-accent) 18%);
+  /* 底色来自站点色，而不是一块与内容无关的固定色。 */
+  background: color-mix(in srgb, var(--wd-site-color, var(--interactive-accent)) 14%, var(--background-primary));
 }
 
 .web-desk-preview-favicon {
-  width: min(72px, 30%);
+  width: min(48px, 40%);
   aspect-ratio: 1;
   object-fit: contain;
-  filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.18));
+  border-radius: var(--wd-radius-sm);
 }
 
 .web-desk-preview-fallback .web-desk-icon-letter {
-  width: 72px;
-  height: 72px;
-  max-width: 30%;
+  width: 44px;
+  height: 44px;
+  max-width: 40%;
   max-height: 70%;
   aspect-ratio: 1;
-  border-radius: var(--wd-radius-md);
+  border-radius: var(--wd-radius-sm);
+  font-size: 20px !important;
 }
 
 .web-desk-preview-body {
@@ -848,8 +883,10 @@ body.mod-macos .web-desk-file-fullscreen {
 
 .web-desk-preview-host {
   overflow: hidden;
-  color: var(--text-muted);
-  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -857,12 +894,12 @@ body.mod-macos .web-desk-file-fullscreen {
 
 .web-desk-preview-title {
   display: -webkit-box;
-  margin: var(--wd-space-1) 0 0;
+  margin: 3px 0 0;
   overflow: hidden;
   color: var(--text-normal);
-  font-size: var(--font-ui-medium);
-  font-weight: 650;
-  line-height: 1.25;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
   text-wrap: balance;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -870,20 +907,24 @@ body.mod-macos .web-desk-file-fullscreen {
 
 .web-desk-preview-description {
   display: -webkit-box;
-  margin: var(--wd-space-2) 0 0;
+  margin: 6px 0 0;
   overflow: hidden;
   color: var(--text-muted);
-  font-size: var(--font-ui-small);
-  line-height: 1.35;
+  font-size: 12.5px;
+  line-height: 1.45;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
 }
 
-.web-desk-icon.is-preview:hover .web-desk-preview-card,
+.web-desk-icon.is-preview:hover .web-desk-preview-card {
+  border-color: var(--wd-border-strong);
+  box-shadow: var(--wd-shadow-hover);
+}
+
 .web-desk-icon.is-preview:focus-visible .web-desk-preview-card,
 .web-desk-icon.is-preview.is-selected .web-desk-preview-card {
   border-color: var(--interactive-accent);
-  box-shadow: 0 0 0 2px var(--interactive-accent-hover), var(--wd-shadow-md);
+  box-shadow: var(--wd-selection-ring), var(--wd-shadow-object);
 }
 
 /* 实时网页是同一 URL 对象的第三种外观；默认由交互盾保护画布拖拽。 */
@@ -1001,17 +1042,23 @@ body.mod-macos .web-desk-file-fullscreen {
   font-size: var(--font-ui-small);
 }
 
-.web-desk-icon.is-embed:hover .web-desk-embed-card,
+.web-desk-icon.is-embed:hover .web-desk-embed-card {
+  border-color: var(--wd-border-strong);
+  box-shadow: var(--wd-shadow-hover);
+}
+
 .web-desk-icon.is-embed:focus-visible .web-desk-embed-card,
 .web-desk-icon.is-embed.is-selected .web-desk-embed-card {
   border-color: var(--interactive-accent);
-  box-shadow: 0 0 0 2px var(--interactive-accent-hover), var(--wd-shadow-md);
+  box-shadow: var(--wd-selection-ring), var(--wd-shadow-object);
 }
 
 /* Caption 是网页对象的公开说明，位于展示面下方但不侵占对象几何。 */
 .web-desk-card-caption {
   display: block;
-  width: 100%;
+  width: max(100%, 200px);
+  flex: none;
+  align-self: center;
   min-height: 24px;
   max-height: 88px;
   box-sizing: border-box;
@@ -1049,13 +1096,14 @@ body.mod-macos .web-desk-file-fullscreen {
   z-index: 80;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
   min-height: 0;
   padding: 3px;
   border: 1px solid var(--wd-border-color);
   border-radius: var(--wd-radius-md);
-  background: color-mix(in srgb, var(--background-primary) 96%, transparent);
-  box-shadow: var(--wd-shadow-md);
+  background: var(--wd-surface-float);
+  backdrop-filter: blur(12px) saturate(140%);
+  box-shadow: var(--wd-shadow-float);
   transform-origin: center bottom;
   animation: web-desk-toolbar-in 140ms cubic-bezier(0.23, 1, 0.32, 1);
   max-width: calc(100% - 16px);
@@ -1073,6 +1121,27 @@ body.mod-macos .web-desk-file-fullscreen {
   display: none;
 }
 
+/* Obsidian 给 button:not(.clickable-icon) 加了内阴影和底色，优先级高于单个类名；
+   画布内所有工具按钮统一在这里压平，工具条才是一个整体而不是一排按钮。 */
+button.web-desk-selection-tool,
+button.web-desk-create-tool,
+button.web-desk-tool-btn,
+button.web-desk-rating-star,
+button.web-desk-embed-action,
+button.web-desk-file-embed-action,
+button.web-desk-drilldown-back,
+button.web-desk-drilldown-close,
+button.web-desk-drilldown-crumb,
+button.web-desk-file-fullscreen-back,
+button.web-desk-file-fullscreen-open {
+  margin: 0;
+  border: 0;
+  background: transparent;
+  background-color: transparent;
+  box-shadow: none;
+  font-family: inherit;
+}
+
 .web-desk-selection-tool {
   display: inline-flex;
   align-items: center;
@@ -1081,19 +1150,25 @@ body.mod-macos .web-desk-file-fullscreen {
   min-width: var(--wd-control-compact);
   height: var(--wd-control-compact);
   padding: 0 7px;
-  border: 0;
   border-radius: var(--wd-radius-sm);
-  background: transparent;
-  box-shadow: none;
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
   font-weight: 550;
 }
 
-.web-desk-selection-tool:hover,
-.web-desk-selection-tool:focus-visible {
-  background: var(--background-modifier-hover);
+button.web-desk-selection-tool:hover,
+button.web-desk-selection-tool:focus-visible {
+  background-color: var(--background-modifier-hover);
   color: var(--text-normal);
+}
+
+.web-desk-selection-tool-chevron,
+.web-desk-selection-tool-chevron svg {
+  display: block;
+  width: 12px;
+  height: 12px;
+  margin-left: -3px;
+  opacity: 0.7;
 }
 
 .web-desk-selection-tool:active {
@@ -1145,10 +1220,12 @@ body.mod-macos .web-desk-file-fullscreen {
 }
 
 /* 空间区域（旧类名保留以兼容现有画布数据与样式） */
+/* 区域是画在画布上的"墨"，不是卡片：实线或无线，底色很淡，名字在框外上方。 */
 .web-desk-group {
   position: absolute;
-  border: 2px dashed transparent;
-  border-radius: var(--wd-radius-lg);
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: var(--wd-radius-md);
   background: transparent;
   /* 区域底板接管空白区拖动；网页、图片等组件靠各自 z-index 保持独立操作。 */
   z-index: auto;
@@ -1158,16 +1235,16 @@ body.mod-macos .web-desk-file-fullscreen {
 }
 
 .web-desk-group.has-border {
-  border-color: var(--wd-container-color);
+  border-color: color-mix(in srgb, var(--wd-container-color) 55%, transparent);
 }
 
 .web-desk-group.has-fill {
-  background-color: color-mix(in srgb, var(--wd-container-color) 7%, transparent);
+  background-color: color-mix(in srgb, var(--wd-container-color) 8%, transparent);
 }
 
 .web-desk-group:not(.has-border):hover,
 .web-desk-group:not(.has-border):focus-within {
-  border-color: color-mix(in srgb, var(--text-faint) 52%, transparent);
+  border-color: color-mix(in srgb, var(--text-faint) 40%, transparent);
 }
 
 .web-desk-group.is-drop-target {
@@ -1183,23 +1260,34 @@ body.mod-macos .web-desk-file-fullscreen {
   cursor: grabbing;
 }
 
+/* 名字挂在区域上沿之外，并按 1/zoom 反向缩放：缩小画布时名字仍是屏幕上的 12px，
+   缩小视图靠区域名导航。transform-origin 取左下，缩放后始终贴着区域左上角。 */
 .web-desk-group-header {
   position: absolute;
-  top: -14px;
-  left: 14px;
+  bottom: 100%;
+  left: 0;
+  margin-bottom: 4px;
+  max-width: 100%;
+  overflow: hidden;
   color: var(--text-muted);
-  font-weight: 550;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 18px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   cursor: grab;
-  background-color: var(--background-primary);
-  border-radius: var(--wd-radius-sm);
   padding: 0 6px;
+  border-radius: var(--wd-radius-sm);
   pointer-events: auto;
   z-index: 12;
+  transform: scale(calc(1 / var(--wd-zoom, 1)));
+  transform-origin: left bottom;
 }
 
 .web-desk-group.has-border .web-desk-group-header,
 .web-desk-group.has-fill .web-desk-group-header {
-  color: color-mix(in srgb, var(--wd-container-color) 55%, var(--text-normal));
+  color: color-mix(in srgb, var(--wd-container-color) 60%, var(--text-normal));
 }
 
 .web-desk-group-header:active {
@@ -1209,9 +1297,10 @@ body.mod-macos .web-desk-file-fullscreen {
 .web-desk-group-header.is-editing {
   min-width: 72px;
   color: var(--text-normal);
+  background-color: var(--background-primary);
   cursor: text;
   outline: none;
-  box-shadow: 0 2px 0 var(--interactive-accent);
+  box-shadow: 0 0 0 1px var(--interactive-accent);
   user-select: text;
 }
 
@@ -1219,19 +1308,21 @@ body.mod-macos .web-desk-file-fullscreen {
   cursor: text;
 }
 
+/* 统一的圆点缩放手柄：静止隐藏，hover / 选中淡入。 */
 .web-desk-group-resize,
 .web-desk-textbox-resize,
 .web-desk-image-resize,
 .web-desk-icon-resize {
   position: absolute;
-  right: -6px;
-  bottom: -6px;
-  width: 16px;
-  height: 16px;
-  border-right: 3px solid;
-  border-bottom: 3px solid;
-  border-color: inherit;
-  border-bottom-right-radius: var(--wd-radius-sm);
+  right: -5px;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box;
+  border: 2px solid var(--background-primary);
+  border-radius: 50%;
+  background-color: var(--interactive-accent);
+  box-shadow: 0 0 0 1px var(--interactive-accent);
   cursor: nwse-resize;
   opacity: 0;
   transition: opacity var(--wd-motion-fast);
@@ -1247,11 +1338,6 @@ body.mod-macos .web-desk-file-fullscreen {
   inset: -7px;
 }
 
-.web-desk-group:not(.has-border) > .web-desk-group-resize,
-.web-desk-textbox:not(.has-border) > .web-desk-textbox-resize {
-  border-color: var(--interactive-accent);
-}
-
 .web-desk-group-resize {
   pointer-events: auto;
   z-index: 12;
@@ -1263,10 +1349,13 @@ body.mod-macos .web-desk-file-fullscreen {
 }
 
 .web-desk-icon-resize {
-  right: 2px;
+  right: 7px;
   bottom: auto;
-  border-color: var(--interactive-accent);
   z-index: 2;
+}
+
+.web-desk-icon.is-card-surface > .web-desk-icon-resize {
+  right: -5px;
 }
 
 .web-desk-group:hover > .web-desk-group-resize,
@@ -1355,23 +1444,23 @@ body.mod-macos .web-desk-file-fullscreen {
   bottom: 14px;
   display: flex;
   align-items: center;
-  gap: 2px;
-  background-color: var(--wd-surface);
+  gap: 1px;
+  background: var(--wd-surface-float);
+  backdrop-filter: blur(12px) saturate(140%);
   border: 1px solid var(--wd-border-color);
   border-radius: var(--wd-radius-md);
-  padding: 3px 4px;
+  padding: 3px;
   z-index: 30;
-  box-shadow: var(--wd-shadow-sm);
+  box-shadow: var(--wd-shadow-float);
 }
 
 .web-desk-tool-btn {
-  display: inline-grid;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
   min-width: var(--wd-control-compact);
   height: var(--wd-control-compact);
-  background: none;
-  border: none;
-  box-shadow: none;
   color: var(--text-muted);
   cursor: pointer;
   padding: 0 6px;
@@ -1379,17 +1468,23 @@ body.mod-macos .web-desk-file-fullscreen {
   font-size: var(--font-ui-smaller);
 }
 
-.web-desk-tool-btn:hover {
+.web-desk-tool-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+button.web-desk-tool-btn:hover,
+button.web-desk-tool-btn:focus-visible {
   color: var(--text-normal);
   background-color: var(--background-modifier-hover);
-  border-radius: var(--wd-radius-sm);
 }
 
 .web-desk-zoom-label {
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
-  min-width: 42px;
+  min-width: 40px;
   text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 /* 空态提示 */
@@ -1622,9 +1717,9 @@ body.mod-macos .web-desk-file-fullscreen {
   position: relative;
   overflow: hidden;
   border: 1px solid var(--wd-border-color);
-  border-radius: var(--wd-radius-lg);
-  background-color: var(--wd-surface);
-  background-image: radial-gradient(circle, var(--wd-border-color) 1px, transparent 1px);
+  border-radius: var(--wd-radius-md);
+  background-color: var(--background-primary);
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--wd-border-color) 80%, transparent) 1px, transparent 1px);
   background-size: 24px 24px;
   user-select: none;
   -webkit-user-select: none;
@@ -1747,29 +1842,30 @@ body:has(.web-desk-drilldown) > .modal-container {
 /* 主画布：文本框（缺 position:absolute 会让拖拽改 left/top 无视觉效果——V2 教训） */
 .web-desk-textbox {
   position: absolute;
-  border: 2px dashed transparent;
-  border-radius: var(--wd-radius-md);
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: var(--wd-radius-sm);
   background: transparent;
   z-index: 6;
   transition: border-color var(--wd-motion-fast), background-color var(--wd-motion-fast);
 }
 
 .web-desk-textbox.has-border {
-  border-color: var(--wd-container-color);
+  border-color: color-mix(in srgb, var(--wd-container-color) 55%, transparent);
 }
 
 .web-desk-textbox.has-fill {
-  background-color: color-mix(in srgb, var(--wd-container-color) 8%, transparent);
+  background-color: color-mix(in srgb, var(--wd-container-color) 10%, transparent);
 }
 
 .web-desk-textbox:not(.has-border):hover,
 .web-desk-textbox:not(.has-border):focus-within {
-  border-color: color-mix(in srgb, var(--text-faint) 52%, transparent);
+  border-color: color-mix(in srgb, var(--text-faint) 40%, transparent);
 }
 
 .web-desk-textbox-text {
   padding: 10px 12px;
-  font-size: var(--font-ui-small);
+  font-size: 14px;
   color: var(--text-normal);
   white-space: pre-wrap;
   overflow: hidden;
@@ -1787,96 +1883,89 @@ body:has(.web-desk-drilldown) > .modal-container {
 }
 
 /* 评分：独立存在或语义绑定网页，不与网页卡片形成嵌套卡片。 */
+/* 评分是一行星星，不是表单：160×56 的透明底板，绑定时星星上方一行目标名。 */
 .web-desk-rating {
   position: absolute;
-  width: 208px;
-  min-height: 86px;
+  width: 160px;
+  height: 56px;
   box-sizing: border-box;
-  padding: var(--wd-space-2) var(--wd-space-3) var(--wd-space-3);
-  border: 1px solid var(--wd-border-color);
-  border-radius: var(--wd-radius-md);
-  background-color: var(--wd-surface);
-  box-shadow: var(--wd-shadow-sm);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--wd-radius-sm);
+  background-color: transparent;
   cursor: grab;
   z-index: 8;
+  transition: border-color var(--wd-motion-fast), background-color var(--wd-motion-fast);
 }
 
 .web-desk-rating:active {
   cursor: grabbing;
 }
 
-.web-desk-rating:hover {
-  border-color: var(--interactive-accent);
-  box-shadow: var(--wd-shadow-md);
+.web-desk-rating:hover,
+.web-desk-rating:focus-within {
+  border-color: color-mix(in srgb, var(--text-faint) 40%, transparent);
+  background-color: color-mix(in srgb, var(--background-primary) 70%, transparent);
 }
 
 .web-desk-rating:focus-visible {
-  outline: 2px solid var(--interactive-accent);
-  outline-offset: 2px;
+  outline: none;
 }
 
-.web-desk-rating.is-missing {
-  border-style: dashed;
+.web-desk-rating.is-missing .web-desk-rating-link {
+  color: var(--text-faint);
+  text-decoration: line-through;
 }
 
 .web-desk-rating-header {
   display: flex;
   align-items: baseline;
+  max-width: 100%;
   gap: var(--wd-space-2);
-  margin-bottom: var(--wd-space-2);
 }
 
 .web-desk-rating-link {
-  flex: 1;
   min-width: 0;
+  max-width: 140px;
   overflow: hidden;
   color: var(--text-muted);
-  font-size: var(--font-ui-smaller);
+  font-size: 11px;
+  font-weight: 500;
   line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.web-desk-rating.is-missing .web-desk-rating-link {
-  color: var(--text-faint);
-}
-
-.web-desk-rating-value {
-  flex: none;
-  color: var(--text-faint);
-  font-size: var(--font-ui-smaller);
-  font-variant-numeric: tabular-nums;
-}
-
 .web-desk-rating-stars {
   display: flex;
   align-items: center;
-  gap: var(--wd-space-1);
+  gap: 0;
 }
 
 .web-desk-rating-star {
   appearance: none;
-  width: 28px;
-  height: 28px;
-  margin: 0;
+  width: 26px;
+  height: 26px;
   padding: 0;
-  border: 0;
   border-radius: var(--wd-radius-sm);
-  background: transparent;
-  box-shadow: none;
-  color: var(--text-faint);
+  color: color-mix(in srgb, var(--text-faint) 55%, transparent);
   cursor: pointer;
-  font-size: 22px;
+  font-size: 20px;
   line-height: 1;
   transition: color var(--wd-motion-fast), transform var(--wd-motion-fast);
 }
 
-.web-desk-rating-star:hover,
-.web-desk-rating-star:focus-visible {
+button.web-desk-rating-star:hover,
+button.web-desk-rating-star:focus-visible {
   color: var(--wd-rating-active);
-  background-color: var(--background-modifier-hover);
+  background-color: transparent;
   outline: none;
-  transform: translateY(-1px);
+  transform: scale(1.15);
 }
 
 .web-desk-rating-star.is-active {
@@ -1915,9 +2004,9 @@ body:has(.web-desk-drilldown) > .modal-container {
   height: 100%;
   box-sizing: border-box;
   border: 1px solid var(--wd-border-color);
-  border-radius: var(--wd-radius-md);
+  border-radius: var(--wd-radius-sm);
   background-color: var(--wd-surface);
-  box-shadow: var(--wd-shadow-sm);
+  box-shadow: var(--wd-shadow-object);
   transition: box-shadow var(--wd-motion-fast), border-color var(--wd-motion-fast);
 }
 
@@ -1930,8 +2019,8 @@ body:has(.web-desk-drilldown) > .modal-container {
 
 .web-desk-image:hover .web-desk-image-content,
 .web-desk-image:hover .web-desk-image-missing {
-  border-color: var(--interactive-accent);
-  box-shadow: var(--wd-shadow-md);
+  border-color: var(--wd-border-strong);
+  box-shadow: var(--wd-shadow-hover);
 }
 
 .web-desk-image-missing {
@@ -2020,11 +2109,12 @@ body:has(.web-desk-drilldown) > .modal-container {
   align-items: center;
   gap: 5px;
   height: var(--wd-control-compact);
-  padding: 0 8px 0 6px;
+  padding: 0 9px 0 7px;
+  margin-right: 2px;
   border-right: 1px solid var(--wd-border-color);
-  color: var(--text-normal);
+  color: var(--text-muted);
   font-size: var(--font-ui-smaller);
-  font-weight: 650;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -2034,20 +2124,22 @@ body:has(.web-desk-drilldown) > .modal-container {
   border-radius: 0 var(--wd-radius-sm) var(--wd-radius-sm) 0;
 }
 
+/* 创建栏与 Obsidian Canvas 一样放在底部居中，不压在内容上。 */
 .web-desk-create-rail {
   position: absolute;
-  left: 14px;
-  top: 50%;
+  left: 50%;
+  bottom: 14px;
   z-index: 30;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: 1px;
   padding: 3px;
-  transform: translateY(-50%);
+  transform: translateX(-50%);
   border: 1px solid var(--wd-border-color);
   border-radius: var(--wd-radius-md);
-  background: color-mix(in srgb, var(--background-primary) 96%, transparent);
-  box-shadow: var(--wd-shadow-sm);
+  background: var(--wd-surface-float);
+  backdrop-filter: blur(12px) saturate(140%);
+  box-shadow: var(--wd-shadow-float);
 }
 
 .web-desk-create-tool {
@@ -2056,10 +2148,7 @@ body:has(.web-desk-drilldown) > .modal-container {
   width: var(--wd-control-compact);
   height: var(--wd-control-compact);
   padding: 0;
-  border: 0;
   border-radius: var(--wd-radius-sm);
-  background: transparent;
-  box-shadow: none;
   color: var(--text-muted);
 }
 
@@ -2068,17 +2157,17 @@ body:has(.web-desk-drilldown) > .modal-container {
   height: 16px;
 }
 
-.web-desk-create-tool:hover,
-.web-desk-create-tool:focus-visible {
+button.web-desk-create-tool:hover,
+button.web-desk-create-tool:focus-visible {
   color: var(--text-normal);
-  background: var(--background-modifier-hover);
+  background-color: var(--background-modifier-hover);
 }
 
 .web-desk-create-tool:active { transform: scale(0.96); }
 
 .web-desk-group.is-selected {
   border-color: var(--interactive-accent);
-  box-shadow: none;
+  box-shadow: var(--wd-selection-ring);
 }
 
 .web-desk-hint-action {
@@ -2096,9 +2185,9 @@ body:has(.web-desk-drilldown) > .modal-container {
   box-sizing: border-box;
   overflow: hidden;
   border: 1px solid var(--wd-border-color);
-  border-radius: var(--wd-radius-lg);
+  border-radius: var(--wd-radius-md);
   background: var(--background-primary);
-  box-shadow: var(--wd-shadow-sm);
+  box-shadow: var(--wd-shadow-object);
 }
 
 .web-desk-pending-visual {
@@ -2146,9 +2235,7 @@ body:has(.web-desk-drilldown) > .modal-container {
 
 @media (max-width: 520px) {
   .web-desk-create-rail {
-    top: auto;
-    bottom: 14px;
-    flex-direction: row;
+    left: 14px;
     transform: none;
   }
   .web-desk-toolbar { bottom: 66px; }
@@ -2158,15 +2245,35 @@ body:has(.web-desk-drilldown) > .modal-container {
 
 @container (max-width: 520px) {
   .web-desk-create-rail {
-    top: auto;
-    bottom: 14px;
-    flex-direction: row;
+    left: 14px;
     transform: none;
   }
 
   .web-desk-toolbar { bottom: 66px; }
   .web-desk-selection-identity-label,
   .web-desk-selection-tool-label { display: none; }
+}
+
+/* 语义缩放：缩小时说明、摘要、标题依次让位给图标；区域名靠 --wd-zoom 反向缩放保持可读。 */
+[data-zoom-band="mid"] .web-desk-card-caption:not(.is-editing),
+[data-zoom-band="far"] .web-desk-card-caption:not(.is-editing),
+[data-zoom-band="far"] .web-desk-preview-description,
+[data-zoom-band="far"] .web-desk-card-note-badge,
+[data-zoom-band="far"] .web-desk-icon-label {
+  display: none;
+}
+
+[data-zoom-band="mid"] .web-desk-icon-label {
+  -webkit-line-clamp: 1;
+}
+
+[data-zoom-band="far"] .web-desk-preview-title {
+  -webkit-line-clamp: 1;
+  font-size: 16px;
+}
+
+[data-zoom-band="far"] .web-desk-group-header {
+  font-size: 13px;
 }
 
 @media (prefers-reduced-transparency: reduce) {

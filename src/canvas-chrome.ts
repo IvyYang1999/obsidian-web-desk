@@ -266,7 +266,12 @@ export function createCanvasObjectToolbar(
     });
     const iconEl = button.createSpan({ cls: "web-desk-selection-tool-icon" });
     setIcon(iconEl, action.icon);
-    if (action.text) button.createSpan({ cls: "web-desk-selection-tool-label", text: action.text });
+    if (action.text) {
+      button.createSpan({ cls: "web-desk-selection-tool-label", text: action.text });
+      const chevron = button.createSpan({ cls: "web-desk-selection-tool-chevron" });
+      setIcon(chevron, "chevron-down");
+      button.setAttribute("aria-haspopup", "menu");
+    }
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();

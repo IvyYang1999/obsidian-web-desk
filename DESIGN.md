@@ -8,30 +8,49 @@
 4. 新视觉值出现三次以上，或已承担稳定语义时，才提升为 token。
 5. 不引入独立组件库：Obsidian 已提供菜单、弹窗和主题语义；插件只维护画布特有的交互原语。
 
+## 表面层级（2026-09-03 起）
+
+画布上的东西分三层，每层只能用自己那一档的边、阴影和圆角；"所有对象都是一张带阴影的卡片"正是此前不精致的根因。
+
+| 层 | 成员 | 边 | 阴影 | 圆角 |
+|---|---|---|---|---|
+| L0 画布 | 点阵背景 | 无 | 无 | 无 |
+| L1 内容对象 | 图标瓦片、预览卡、图片、文件卡、待导入卡 | 1px `--wd-border-color` | `--wd-shadow-object`（几乎不可见）；hover 才升到 `--wd-shadow-hover` | `--wd-radius-md`（图标瓦片 `lg`，图片/文本 `sm`） |
+| L2 浮层 | 选中态工具栏、创建栏、缩放条、菜单、弹窗 | 1px | `--wd-shadow-float` + 轻微毛玻璃 | `--wd-radius-md` |
+| 墨 | 区域、文本框、评分、箭头、caption | 默认无边无底；`has-border` 为 1px 实线，`has-fill` 为 8–10% 底色 | 无 | `sm`/`md` |
+
+- 选中态统一是 `--wd-selection-ring`（2px accent），不叠加大阴影；hover 只提升边框色与一点阴影。
+- 虚线只保留给手势反馈（框选、缩放中的临时环）；长期存在的对象不用虚线。
+- 缩放手柄统一是 10px 圆点（accent 底、背景色描边），静止隐藏，hover / 选中淡入。
+- Obsidian 给 `button:not(.clickable-icon)` 加了内阴影与底色，优先级高于单个类名；画布内所有工具按钮由 `button.web-desk-*` 选择器统一压平，工具条才是一个整体。
+- 站点图标先显示首字母色块，`FaviconResolver` 取到 ≥24px 的图标后再替换；图标缓存在 `<imageFolder>/网站图标/`。
+- 语义缩放：根节点带 `data-zoom-band`（near ≥ 0.75、mid ≥ 0.45、far）。mid 隐藏 caption、标题一行；far 再隐藏图标标题与摘要。区域名按 `1/var(--wd-zoom)` 反向缩放，缩小视图靠区域名导航。
+
 ## Tokens
 
 | Token | 用途 |
 |---|---|
-| `--wd-surface` | 工具条、图片、图标缩略图等浮层表面 |
-| `--wd-border-color` | 常规边框与点阵颜色 |
-| `--wd-radius-sm/md/lg` | 控件、画布对象、主要容器圆角 |
+| `--wd-surface` / `--wd-surface-float` | L1 内容对象表面 / L2 浮层表面 |
+| `--wd-border-color` / `--wd-border-strong` | 常规边框与点阵颜色 / hover 时加深的边框 |
+| `--wd-radius-sm/md/lg` | 6/10/12px：墨与图片 / 卡片与浮层 / 图标瓦片 |
 | `--wd-space-1/2/3` | 4/8/12px 重复间距 |
 | `--wd-control-compact` | 画布工具栏的 32px 桌面控件尺寸 |
-| `--wd-shadow-sm/md` | 静止态与 hover/选中态阴影 |
+| `--wd-shadow-object/hover/float` | L1 静止 / L1 hover / L2 浮层阴影（`--wd-shadow-sm/md` 是旧别名） |
+| `--wd-selection-ring` | 选中与键盘焦点共用的 2px accent 描边 |
 | `--wd-motion-fast` | hover 与边框反馈动画 |
 | `--wd-rating-active` | 评分星级的语义强调色，优先继承主题黄色 |
 
 ## 组件约束
 
 - `web-desk-toolbar`：只放视图级短操作，按钮统一使用 `web-desk-tool-btn`；画布浮动控件使用 32px 紧凑桌面规格。
-- `web-desk-create-rail`：两种画布共享的可见创建入口；一级只保留添加、文本、分组、更多四项，细分动作进入原生菜单；按钮与对象工具栏共享紧凑尺寸和 16px 图标。
+- `web-desk-create-rail`：两种画布共享的可见创建入口，与 Obsidian Canvas 一样放在底部居中；一级只保留添加、文本、分组、更多四项，细分动作进入原生菜单；按钮与对象工具栏共享紧凑尺寸和 16px 图标。新建文本框按矩形找最近空位并自动选中。
 - `web-desk-icon`：网页收藏；视觉重心是方形缩略图和两行标题。
-- `web-desk-rating`：1–5 星评分；可独立或语义绑定网页，链接失效时保留评分并使用 missing 状态。
+- `web-desk-rating`：1–5 星评分，160×56 的一行星星，不是卡片；独立评分只有星星，绑定评分在星星上方显示目标名，链接失效时保留评分并使用 missing 状态。
 - `web-desk-image`：Vault 图片附件；拖动主体，右下角手柄等比例缩放。
 - `web-desk-textbox`：自由备注；允许非等比例调整。默认只显示文字，边框和底色是显式可选外观。
-- `web-desk-group`：归类范围；默认只显示名称，边框和底色是显式可选外观，不承载正文内容。
+- `web-desk-group`：归类范围；名称挂在框外上沿并保持屏幕尺寸，边框和底色是显式可选外观（实线、淡底），不承载正文内容。
 - `web-desk-color-picker`：区域与文本框共用的颜色入口；七个稳定预设负责跨画布一致性，系统取色器与合法 HEX 输入负责完全自定义。自定义值只接受 `#RGB` / `#RRGGBB`，持久化前统一为六位小写。
-- `*-resize`：右下角统一缩放手柄；静止时隐藏，元素 hover 或键盘聚焦时淡入，缩放会话中保持可见；不得各组件自行复制尺寸和边框规则。
+- `*-resize`：右下角统一的圆点缩放手柄；静止时隐藏，元素 hover 或键盘聚焦时淡入，缩放会话中保持可见；不得各组件自行复制尺寸和边框规则。
 
 ## 交互原语
 

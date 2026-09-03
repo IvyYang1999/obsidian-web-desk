@@ -19,7 +19,7 @@ import { planAutoPositions, readCard, writeDeskFields } from "./layout";
 import type { FaviconResolve } from "./favicon-cache";
 import { applyRecentLayoutWrite, RecentLayoutWrite } from "./layout-state";
 import { CanvasFileSuggestModal, CardPropertiesModal, ConfirmModal, PreviewFileSuggestModal, TextInputModal } from "./modals";
-import { normalizeRatingValue, ratingLinkState } from "./rating-state";
+import { normalizeRatingValue, RATING_HEIGHT, RATING_WIDTH, ratingLinkState } from "./rating-state";
 import { applyCardPropertiesToFrontmatter } from "./card-properties-state";
 import { applyCardCaptionToFrontmatter, normalizeCardCaption } from "./card-caption-state";
 import { cardAccessibleLabel, renderCardPropertyIndicators } from "./card-properties-ui";
@@ -44,7 +44,8 @@ import {
   type SnapRect,
 } from "./canvas-snap";
 import { canvasWheelIntent } from "./canvas-wheel";
-import { canvasSafeViewport, fitCanvasBounds } from "./canvas-viewport-state";
+import { applyCanvasZoomBand, canvasSafeViewport, fitCanvasBounds } from "./canvas-viewport-state";
+import { findFreePosition } from "./canvas-free-position";
 import { processFrontmatterSerially } from "./frontmatter-write";
 import {
   GroupObjectRect,
@@ -290,10 +291,15 @@ export class WebDeskView extends ItemView {
     ]);
 
     const toolbar = this.rootEl.createDiv({ cls: "web-desk-toolbar" });
-    const zoomOut = toolbar.createEl("button", { text: "－", cls: "web-desk-tool-btn" });
+    toolbar.setAttribute("role", "toolbar");
+    toolbar.setAttribute("aria-label", "画布缩放");
+    const zoomOut = toolbar.createEl("button", { cls: "web-desk-tool-btn", attr: { type: "button", "aria-label": "缩小", title: "缩小" } });
+    setIcon(zoomOut, "minus");
     this.zoomLabelEl = toolbar.createEl("span", { cls: "web-desk-zoom-label", text: "100%" });
-    const zoomIn = toolbar.createEl("button", { text: "＋", cls: "web-desk-tool-btn" });
-    const fit = toolbar.createEl("button", { text: "适应", cls: "web-desk-tool-btn" });
+    const zoomIn = toolbar.createEl("button", { cls: "web-desk-tool-btn", attr: { type: "button", "aria-label": "放大", title: "放大" } });
+    setIcon(zoomIn, "plus");
+    const fit = toolbar.createEl("button", { cls: "web-desk-tool-btn", attr: { type: "button", "aria-label": "适应内容", title: "适应内容" } });
+    setIcon(fit, "maximize");
 
     zoomOut.addEventListener("click", () => this.zoomAtCenter(1 / 1.2));
     zoomIn.addEventListener("click", () => this.zoomAtCenter(1.2));
@@ -627,6 +633,7 @@ export class WebDeskView extends ItemView {
     const grid = canvasGridBackground(this.transform.panX, this.transform.panY, this.transform.zoom);
     this.rootEl.style.backgroundSize = grid.size;
     this.rootEl.style.backgroundPosition = grid.position;
+    applyCanvasZoomBand(this.rootEl, this.transform.zoom);
     this.zoomLabelEl.setText(`${Math.round(this.transform.zoom * 100)}%`);
     this.positionSelectionToolbar();
   }
@@ -708,7 +715,7 @@ export class WebDeskView extends ItemView {
     for (const rating of this.host.getRatings()) {
       const scale = rating.scale ?? 1;
       expand(rating.x, rating.y);
-      expand(rating.x + 208 * scale, rating.y + 86 * scale);
+      expand(rating.x + RATING_WIDTH * scale, rating.y + RATING_HEIGHT * scale);
     }
 
     if (minX === Infinity) {
@@ -1693,8 +1700,8 @@ export class WebDeskView extends ItemView {
         label: card.targetPath
           ? "嵌入阅读"
           : isRememberedBlockedHost(this.settings.blockedEmbedHosts, card.url)
-          ? "重新尝试实时嵌入"
-          : "实时嵌入",
+          ? "重新尝试实时嵌入（实验）"
+          : "实时嵌入（实验）",
         icon: "app-window",
       },
     ];
@@ -1866,8 +1873,8 @@ export class WebDeskView extends ItemView {
           objectGroup: rating.objectGroup ?? "",
           x: rating.x,
           y: rating.y,
-          w: 208 * scale,
-          h: 86 * scale,
+          w: RATING_WIDTH * scale,
+          h: RATING_HEIGHT * scale,
           minW: 104,
           minH: 43,
           maxW: 624,
@@ -2066,7 +2073,7 @@ export class WebDeskView extends ItemView {
     }
     const rating = this.host.getRatings().find((entry) => entry.id === origin.id);
     if (!rating) return;
-    rating.scale = clamp((origin.w / 208) * scale, 0.5, 3);
+    rating.scale = clamp((origin.w / RATING_WIDTH) * scale, 0.5, 3);
     const el = this.ratingEls.get(origin.id);
     if (el) el.style.transform = `scale(${rating.scale})`;
   }
@@ -2824,19 +2831,16 @@ export class WebDeskView extends ItemView {
       el.setAttribute("aria-label", `${rating.link?.title ?? "独立评分"}：${rating.value || "未评分"}`);
       el.tabIndex = 0;
 
-      const header = el.createDiv({ cls: "web-desk-rating-header" });
-      header.createSpan({
-        cls: "web-desk-rating-link",
-        text: state === "standalone"
-          ? "独立评分"
-          : state === "missing"
-            ? `原链接已移出 · ${rating.link?.title ?? "网页"}`
+      // 独立评分只有星星；绑定评分在星星上方显示目标名，链接消失时显示 missing。
+      if (state !== "standalone") {
+        const header = el.createDiv({ cls: "web-desk-rating-header" });
+        header.createSpan({
+          cls: "web-desk-rating-link",
+          text: state === "missing"
+            ? `已移出 · ${rating.link?.title ?? "网页"}`
             : linkedCard?.title ?? rating.link?.title ?? "网页",
-      });
-      header.createSpan({
-        cls: "web-desk-rating-value",
-        text: rating.value > 0 ? `${rating.value}/5` : "未评分",
-      });
+        });
+      }
 
       const stars = el.createDiv({ cls: "web-desk-rating-stars" });
       for (let value = 1; value <= 5; value += 1) {
@@ -2873,8 +2877,8 @@ export class WebDeskView extends ItemView {
     ratings.push({
       id: `r${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`,
       value: 0,
-      x: Math.round(point.x - 104),
-      y: Math.round(point.y - 43),
+      x: Math.round(point.x - RATING_WIDTH / 2),
+      y: Math.round(point.y - RATING_HEIGHT / 2),
       link: card ? { ref, title: card.title, url: card.url } : undefined,
     });
     this.host.setRatings(ratings);
@@ -3247,11 +3251,17 @@ export class WebDeskView extends ItemView {
   /** 公共 API：右键菜单与冒烟测试共用。 */
   addTextBox(x: number, y: number, text = "双击编辑文本"): TextBox {
     const boxes = this.host.getTextBoxes();
+    // 从工具栏新建时落点是视口中心，那里往往已经有东西：按矩形找最近空位并选中新对象。
+    const occupied = [
+      ...this.allViewObjects().map(({ x, y, w, h }) => ({ x, y, w, h })),
+      ...this.host.getGroups().map((group) => ({ x: group.x, y: group.y, w: group.w, h: group.h })),
+    ];
+    const position = findFreePosition(occupied, { x, y }, { w: 260, h: 120 }, { step: 140, grid: 24 });
     const box: TextBox = {
       id: `t${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`,
       text,
-      x: Math.round(x),
-      y: Math.round(y),
+      x: position.x,
+      y: position.y,
       w: 260,
       h: 120,
       color: GROUP_COLORS[boxes.length % GROUP_COLORS.length],
@@ -3259,6 +3269,7 @@ export class WebDeskView extends ItemView {
     boxes.push(box);
     this.host.setTextBoxes(boxes);
     this.render();
+    this.selectObject(objectKey("textbox", box.id), false);
     return box;
   }
 

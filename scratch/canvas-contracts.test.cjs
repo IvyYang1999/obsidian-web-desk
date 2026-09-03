@@ -219,7 +219,8 @@ test("主画布和文内画布共享网页预览原语并提供模式切换", ()
   assert.match(embed, /显示为预览卡片/);
   assert.match(visual, /data-view-mode/);
   assert.match(css, /\.web-desk-icon\.is-preview/);
-  assert.match(css, /\.web-desk-icon:focus-visible \.web-desk-icon-thumb\s*\{[^}]*box-shadow:\s*0 0 0 2px var\(--interactive-accent\)/s);
+  // 选中与键盘焦点共用同一条 2px accent 选择环 token，不再各画一套。
+  assert.match(css, /\.web-desk-icon\.is-selected \.web-desk-icon-thumb,\s*\.web-desk-icon:focus-visible \.web-desk-icon-thumb\s*\{[^}]*box-shadow:\s*var\(--wd-selection-ring\)/s);
   assert.equal(cardViewState.normalizeCardViewMode("preview"), "preview");
 });
 
@@ -287,8 +288,10 @@ test("分组与文本框在两种画布共享可选容器外观", () => {
   }
   assert.match(chrome, /setTitle\("显示边框"\)[\s\S]*setChecked\(appearance\.showBorder\)/);
   assert.match(chrome, /setTitle\("显示底色"\)[\s\S]*setChecked\(appearance\.showFill\)/);
-  assert.match(styles, /\.web-desk-group\s*\{[^}]*border:\s*2px dashed transparent[^}]*background:\s*transparent/s);
-  assert.match(styles, /\.web-desk-textbox\s*\{[^}]*border:\s*2px dashed transparent[^}]*background:\s*transparent/s);
+  // 区域与文本框默认是"墨"而非卡片：实线且透明，边框和底色只在显式开启时出现；虚线只留给手势反馈。
+  assert.match(styles, /\.web-desk-group\s*\{[^}]*border:\s*1px solid transparent[^}]*background:\s*transparent/s);
+  assert.match(styles, /\.web-desk-textbox\s*\{[^}]*border:\s*1px solid transparent[^}]*background:\s*transparent/s);
+  assert.doesNotMatch(styles, /\.web-desk-(group|textbox)(\.has-border)?\s*\{[^}]*dashed/s);
   assert.match(styles, /\.web-desk-group\.has-border\s*\{[^}]*--wd-container-color/s);
   assert.match(styles, /\.web-desk-textbox\.has-fill\s*\{[^}]*--wd-container-color/s);
 });
@@ -827,10 +830,9 @@ test("内嵌画布连续评分组件不会完全重叠", () => {
     images: [],
     ratings: [{ id: "r1", value: 4, x: 100, y: 100 }],
   };
-  assert.deepEqual(
-    embedState.findAvailableEmbedRatingPosition(data, { x: 100, y: 100 }),
-    { x: 340, y: 100 },
-  );
+  const placed = embedState.findAvailableEmbedRatingPosition(data, { x: 100, y: 100 });
+  assert.equal(placed.y, 100);
+  assert.ok(placed.x >= 100 + 160 + 16, `新评分应落在上一份右侧且留出间距：${JSON.stringify(placed)}`);
 });
 
 test("粘贴一个或多个整行 URL 时全部进入链接导入", () => {

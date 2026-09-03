@@ -1,6 +1,7 @@
 import { App, MarkdownRenderChild, Menu, Notice, setIcon, TFile } from "obsidian";
 import { canEnterCanvasReference } from "./canvas-reference-state";
 import { resolveCanvasReference } from "./canvas-reference";
+import { findFreePosition } from "./canvas-free-position";
 import {
   EmbedData,
   EmbedItem,
@@ -28,7 +29,7 @@ import {
 } from "./clipboard-state";
 import { resizeImageToWidth } from "./image-state";
 import { replaceEmbedMarker } from "./embed-write-state";
-import { normalizeRatingValue, ratingLinkState } from "./rating-state";
+import { normalizeRatingValue, RATING_HEIGHT, RATING_WIDTH, ratingLinkState } from "./rating-state";
 import { importUrlAsBookmark } from "./importer";
 import { CanvasFileSuggestModal, CardPropertiesModal, ConfirmModal, PreviewFileSuggestModal, TextInputModal } from "./modals";
 import { normalizeCardRating } from "./card-properties-state";
@@ -58,7 +59,7 @@ import {
 } from "./canvas-snap";
 import { canvasWheelIntent } from "./canvas-wheel";
 import { CanvasFocusBoundary } from "./canvas-focus-boundary";
-import { canvasSafeViewport, fitCanvasBounds } from "./canvas-viewport-state";
+import { canvasSafeViewport, fitCanvasBounds, applyCanvasZoomBand } from "./canvas-viewport-state";
 import { processFrontmatterSerially } from "./frontmatter-write";
 import {
   GroupObjectRect,
@@ -221,6 +222,8 @@ export class DeskEmbed extends MarkdownRenderChild {
   private fullscreenFocusBoundary: CanvasFocusBoundary | null = null;
   private canvasFileCache = new Map<string, { isCanvas: boolean; mtime: number }>();
   private resolveFavicon?: FaviconResolve;
+  /** 上一实例交来的、尚未在本实例 DOM 上落实的状态；被再次接管时必须原样传下去。 */
+  private pendingHandoff: EmbedInstanceHandoff | null = null;
 
   constructor(
     el: HTMLElement,
@@ -287,10 +290,15 @@ export class DeskEmbed extends MarkdownRenderChild {
     ]);
 
     const toolbar = this.rootEl.createDiv({ cls: "web-desk-toolbar" });
-    const zoomOut = toolbar.createEl("button", { text: "－", cls: "web-desk-tool-btn" });
+    toolbar.setAttribute("role", "toolbar");
+    toolbar.setAttribute("aria-label", "画布缩放");
+    const zoomOut = toolbar.createEl("button", { cls: "web-desk-tool-btn", attr: { type: "button", "aria-label": "缩小", title: "缩小" } });
+    setIcon(zoomOut, "minus");
     this.zoomEl = toolbar.createEl("span", { cls: "web-desk-zoom-label", text: "100%" });
-    const zoomIn = toolbar.createEl("button", { text: "＋", cls: "web-desk-tool-btn" });
-    const fit = toolbar.createEl("button", { text: "适应", cls: "web-desk-tool-btn" });
+    const zoomIn = toolbar.createEl("button", { cls: "web-desk-tool-btn", attr: { type: "button", "aria-label": "放大", title: "放大" } });
+    setIcon(zoomIn, "plus");
+    const fit = toolbar.createEl("button", { cls: "web-desk-tool-btn", attr: { type: "button", "aria-label": "适应内容", title: "适应内容" } });
+    setIcon(fit, "maximize");
     this.fullscreenButtonEl = toolbar.createEl("button", {
       cls: "web-desk-tool-btn web-desk-fullscreen-btn",
       attr: { type: "button", "aria-pressed": "false" },
@@ -325,15 +333,17 @@ export class DeskEmbed extends MarkdownRenderChild {
     this.renderItems();
     this.updateHint();
     this.applyTransform();
-    if (handoff?.fullscreen) {
+    // Obsidian 的实时预览会在一次写回后连续渲染两次代码块；全屏和焦点的落实放在 microtask 里，
+    // 若在此之前就被下一次渲染接管，currentHandoff 需要把这份尚未落实的状态继续传下去。
+    if (handoff && (handoff.fullscreen || handoff.focused)) {
+      this.pendingHandoff = handoff;
       queueMicrotask(() => {
-        if (this.rootEl.isConnected) this.setFullscreen(true);
-      });
-    }
-    if (handoff?.focused) {
-      queueMicrotask(() => {
-        if (this.rootEl.isConnected) {
-          this.rootEl.toggleClass("is-pointer-focused", handoff.pointerFocused);
+        const pending = this.pendingHandoff;
+        this.pendingHandoff = null;
+        if (!pending || !this.rootEl.isConnected) return;
+        if (pending.fullscreen) this.setFullscreen(true);
+        if (pending.focused) {
+          this.rootEl.toggleClass("is-pointer-focused", pending.pointerFocused);
           this.rootEl.focus({ preventScroll: true });
         }
       });
@@ -386,14 +396,17 @@ export class DeskEmbed extends MarkdownRenderChild {
   /** 新 processor 接管同一代码块时，旧 DOM 立即退出交互和全屏占位。 */
   private currentHandoff(): EmbedInstanceHandoff {
     const active = this.rootEl.ownerDocument.activeElement;
-    const focused = active === this.rootEl || this.rootEl.contains(active);
+    const pending = this.pendingHandoff;
+    const focused = Boolean(pending?.focused) || active === this.rootEl || this.rootEl.contains(active);
     return {
       zoom: this.zoom,
       panX: this.panX,
       panY: this.panY,
-      fullscreen: this.isFullscreen,
+      fullscreen: this.isFullscreen || Boolean(pending?.fullscreen),
       focused,
-      pointerFocused: focused && this.rootEl.classList.contains("is-pointer-focused"),
+      pointerFocused: pending?.focused
+        ? pending.pointerFocused
+        : focused && this.rootEl.classList.contains("is-pointer-focused"),
       selectedObjects: [...this.selectedObjects],
       selectedGroupId: this.selectedGroupId,
       selectedArrowId: this.selectedArrowId,
@@ -403,6 +416,7 @@ export class DeskEmbed extends MarkdownRenderChild {
 
   private supersede(): EmbedInstanceHandoff {
     const handoff = this.currentHandoff();
+    this.pendingHandoff = null;
     this.rootEl.addClass("is-superseded");
     this.rootEl.style.pointerEvents = "none";
     if (this.isFullscreen) {
@@ -635,8 +649,8 @@ export class DeskEmbed extends MarkdownRenderChild {
           objectGroup: rating.objectGroup ?? "",
           x: rating.x,
           y: rating.y,
-          w: 208 * scale,
-          h: 86 * scale,
+          w: RATING_WIDTH * scale,
+          h: RATING_HEIGHT * scale,
           minW: 104,
           minH: 43,
           maxW: 624,
@@ -838,7 +852,7 @@ export class DeskEmbed extends MarkdownRenderChild {
     }
     const rating = this.data.ratings.find((entry) => entry.id === origin.id);
     if (!rating) return;
-    rating.scale = Math.min(3, Math.max(0.5, (origin.w / 208) * scale));
+    rating.scale = Math.min(3, Math.max(0.5, (origin.w / RATING_WIDTH) * scale));
     const el = this.ratingEls.get(origin.id);
     if (el) el.style.transform = `scale(${rating.scale})`;
   }
@@ -957,8 +971,8 @@ export class DeskEmbed extends MarkdownRenderChild {
         label: item.path
           ? "嵌入阅读"
           : isRememberedBlockedHost(this.settings.blockedEmbedHosts, item.url)
-          ? "重新尝试实时嵌入"
-          : "实时嵌入",
+          ? "重新尝试实时嵌入（实验）"
+          : "实时嵌入（实验）",
         icon: "app-window",
       },
     ];
@@ -1281,19 +1295,15 @@ export class DeskEmbed extends MarkdownRenderChild {
       el.setAttribute("aria-label", `${rating.link?.title ?? "独立评分"}：${rating.value || "未评分"}`);
       el.tabIndex = 0;
 
-      const header = el.createDiv({ cls: "web-desk-rating-header" });
-      header.createSpan({
-        cls: "web-desk-rating-link",
-        text: state === "standalone"
-          ? "独立评分"
-          : state === "missing"
-            ? `原链接已移出 · ${rating.link?.title ?? "网页"}`
+      if (state !== "standalone") {
+        const header = el.createDiv({ cls: "web-desk-rating-header" });
+        header.createSpan({
+          cls: "web-desk-rating-link",
+          text: state === "missing"
+            ? `已移出 · ${rating.link?.title ?? "网页"}`
             : linkedItem?.title ?? rating.link?.title ?? "网页",
-      });
-      header.createSpan({
-        cls: "web-desk-rating-value",
-        text: rating.value > 0 ? `${rating.value}/5` : "未评分",
-      });
+        });
+      }
 
       const stars = el.createDiv({ cls: "web-desk-rating-stars" });
       for (let value = 1; value <= 5; value += 1) {
@@ -2073,7 +2083,16 @@ export class DeskEmbed extends MarkdownRenderChild {
       this.rootEl.removeEventListener("pointermove", onMove);
       this.rootEl.removeEventListener("pointerup", onUp);
       this.marqueeEl.style.display = "none";
-      if (!moved) return;
+      if (!moved) {
+        // 单击空白处：与主画布一致，非加选时清空选择。
+        if (!additive && (this.selectedObjects.size || this.selectedGroupId || this.selectedArrowId)) {
+          this.selectedObjects.clear();
+          this.selectedGroupId = null;
+          this.selectedArrowId = null;
+          this.syncObjectSelection();
+        }
+        return;
+      }
       const rect = normalizeRect(start, this.clientToCanvas(upEvent.clientX, upEvent.clientY));
       const objects = this.allEmbedObjects();
       for (const object of objects) {
@@ -2553,8 +2572,8 @@ export class DeskEmbed extends MarkdownRenderChild {
       return;
     }
     const desired = {
-      x: Math.round(point.x - 104),
-      y: Math.round(point.y - 43),
+      x: Math.round(point.x - RATING_WIDTH / 2),
+      y: Math.round(point.y - RATING_HEIGHT / 2),
     };
     const position = item
       ? findAvailableEmbedRatingPosition(this.data, desired)
@@ -2883,6 +2902,7 @@ export class DeskEmbed extends MarkdownRenderChild {
     const grid = canvasGridBackground(this.panX, this.panY, this.zoom);
     this.rootEl.style.backgroundSize = grid.size;
     this.rootEl.style.backgroundPosition = grid.position;
+    applyCanvasZoomBand(this.rootEl, this.zoom);
     this.zoomEl.setText(`${Math.round(this.zoom * 100)}%`);
     this.positionSelectionToolbar();
   }
@@ -3139,15 +3159,23 @@ export class DeskEmbed extends MarkdownRenderChild {
 
   private addTextBox(point: { x: number; y: number }, text = "双击编辑"): void {
     const boxes = this.data.textboxes;
+    const occupied = [
+      ...this.allEmbedObjects().map(({ x, y, w, h }) => ({ x, y, w, h })),
+      ...this.data.groups.map((group) => ({ x: group.x, y: group.y, w: group.w, h: group.h })),
+    ];
+    const position = findFreePosition(occupied, { x: point.x - 130, y: point.y - 60 }, { w: 260, h: 120 }, { step: 140, grid: 24 });
+    const id = `t${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
     boxes.push({
-      id: `t${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`,
+      id,
       text,
-      x: Math.round(point.x - 130),
-      y: Math.round(point.y - 60),
+      x: position.x,
+      y: position.y,
       w: 260,
       h: 120,
       color: GROUP_COLORS[boxes.length % GROUP_COLORS.length],
     });
+    this.selectedObjects.clear();
+    this.selectedObjects.add(objectKey("textbox", id));
     this.renderItems();
     this.scheduleWrite();
   }

@@ -1,3 +1,21 @@
+export type CanvasZoomBand = "near" | "mid" | "far";
+
+/**
+ * 语义缩放档位：缩小到一定程度后，说明、摘要、标题依次让位给图标本身，
+ * 区域名则反向放大保持屏幕尺寸，让缩小视图真正可导航。
+ */
+export function canvasZoomBand(zoom: number): CanvasZoomBand {
+  if (zoom < 0.45) return "far";
+  if (zoom < 0.75) return "mid";
+  return "near";
+}
+
+/** 把缩放档位和当前倍率写到画布根节点，供 CSS 做语义缩放。 */
+export function applyCanvasZoomBand(root: HTMLElement, zoom: number): void {
+  root.setAttribute("data-zoom-band", canvasZoomBand(zoom));
+  root.style.setProperty("--wd-zoom", String(zoom));
+}
+
 export interface CanvasChromeInsets {
   top: number;
   right: number;

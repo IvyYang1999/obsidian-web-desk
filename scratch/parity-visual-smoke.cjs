@@ -249,8 +249,8 @@ function prepareFixture() {
     await page.evaluate(() => app.commands.executeCommandById("web-desk:open-web-desk"));
     await page.waitForSelector(".web-desk-root .web-desk-icon", { timeout: 30_000 });
     const main = page.locator(".web-desk-root:visible").last();
-    const mainFit = await main.locator(".web-desk-toolbar .web-desk-tool-btn").allTextContents();
-    await main.locator(".web-desk-toolbar .web-desk-tool-btn", { hasText: "适应" }).click();
+    const mainFit = await main.locator(".web-desk-toolbar .web-desk-tool-btn").evaluateAll((buttons) => buttons.map((b) => b.getAttribute("aria-label") || b.textContent.trim()));
+    await main.locator(".web-desk-toolbar .web-desk-tool-btn[aria-label=\"适应内容\"]").click();
     const mainGroupCountBefore = await main.locator(".web-desk-group").count();
     await main.getByRole("button", { name: "新建区域", exact: true }).click();
     const mainInlineGroupName = main.locator('.web-desk-group-header[contenteditable="plaintext-only"]').last();
@@ -283,7 +283,15 @@ function prepareFixture() {
     await page.mouse.down();
     await page.mouse.move(mainAreaBox.x + mainAreaBox.width / 2, mainAreaBox.y + mainAreaBox.height / 2, { steps: 8 });
     const mainDropTargetVisible = await mainArea.evaluate((element) => element.classList.contains("is-drop-target"));
-    if (!mainDropTargetVisible) throw new Error("main area did not show a drop target");
+    if (!mainDropTargetVisible) {
+      await page.screenshot({ path: "/tmp/webdesk-parity-fail.png" });
+      const debug = await page.evaluate(() => ({
+        groups: [...document.querySelectorAll(".web-desk-root .web-desk-group")].map((g) => ({ name: g.getAttribute("aria-label"), drop: g.classList.contains("is-drop-target"), rect: g.getBoundingClientRect().toJSON() })),
+        selected: [...document.querySelectorAll(".web-desk-root .is-selected")].map((e) => ({ cls: e.className, rect: e.getBoundingClientRect().toJSON() })),
+        zoom: app.workspace.getLeavesOfType("web-desk-view")[0]?.view?.transform,
+      }));
+      throw new Error("main area did not show a drop target: " + JSON.stringify({ mainAreaBox, mainCardBeforeDrop, debug }));
+    }
     await page.mouse.up();
     await page.waitForFunction(async () => {
       const file = app.vault.getAbstractFileByPath("收藏夹/Parity Sample.md");
@@ -478,8 +486,8 @@ function prepareFixture() {
     });
     await page.waitForSelector(".web-desk-embed:visible .web-desk-icon", { timeout: 30_000 });
     const embed = page.locator(".web-desk-embed:visible").last();
-    const embedFit = await embed.locator(".web-desk-toolbar .web-desk-tool-btn").allTextContents();
-    await embed.locator(".web-desk-toolbar .web-desk-tool-btn", { hasText: "适应" }).click();
+    const embedFit = await embed.locator(".web-desk-toolbar .web-desk-tool-btn").evaluateAll((buttons) => buttons.map((b) => b.getAttribute("aria-label") || b.textContent.trim()));
+    await embed.locator(".web-desk-toolbar .web-desk-tool-btn[aria-label=\"适应内容\"]").click();
     await embed.getByRole("button", { name: "全屏", exact: true }).click();
     await page.waitForSelector(".web-desk-embed.is-fullscreen");
     const fullscreenFocus = await page.evaluate(() => {
@@ -834,7 +842,21 @@ function prepareFixture() {
     await embed.getByRole("button", { name: "新建文本框" }).click();
     await page.waitForSelector(".web-desk-embed.is-fullscreen .web-desk-textbox", { timeout: 10_000 });
     const fullscreenAfterWrite = await page.locator(".web-desk-embed.is-fullscreen").count();
-    await page.mouse.click(900, 680);
+    // 新建文本框会被自动选中；点一个确认为空白的点取消选择，并把鼠标移开避免 hover 边框。
+    const blankPoint = await page.evaluate(() => {
+      const root = document.querySelector(".web-desk-embed.is-fullscreen");
+      const rect = root.getBoundingClientRect();
+      for (let y = rect.bottom - 120; y > rect.top + 60; y -= 40) {
+        for (let x = rect.right - 60; x > rect.left + 60; x -= 40) {
+          const hit = document.elementFromPoint(x, y);
+          if (hit && root.contains(hit) && !hit.closest(".web-desk-icon, .web-desk-image, .web-desk-textbox, .web-desk-rating, .web-desk-group, .web-desk-toolbar, .web-desk-create-rail, .web-desk-selection-toolbar, .web-desk-embed-height-resize")) return { x, y };
+        }
+      }
+      return null;
+    });
+    if (!blankPoint) throw new Error("no blank point in fullscreen canvas to clear selection");
+    await page.mouse.click(blankPoint.x, blankPoint.y);
+    await page.mouse.move(4, 4);
     await sleep(180);
     const cleanTextBoxStyle = await page.locator(".web-desk-embed.is-fullscreen .web-desk-textbox").evaluate((element) => ({
       borderColor: getComputedStyle(element).borderTopColor,
@@ -869,7 +891,7 @@ function prepareFixture() {
     await page.waitForFunction(() => !document.querySelector(".web-desk-embed.is-fullscreen"));
     const restoredHeight = await page.locator(".web-desk-embed:visible").last().evaluate((root) => root.getBoundingClientRect().height);
 
-    if (!mainFit.includes("适应") || !embedFit.includes("适应")) {
+    if (!mainFit.includes("适应内容") || !embedFit.includes("适应内容")) {
       throw new Error("missing shared fit toolbar action");
     }
     if (fullscreenAfterWrite !== 1 || Math.abs(restoredHeight - 520) > 2) {
