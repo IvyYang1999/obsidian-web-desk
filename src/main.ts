@@ -1,6 +1,7 @@
 import { Editor, Notice, Plugin, WorkspaceLeaf } from "obsidian";
 import { DeskEmbed } from "./embed";
 import { FaviconResolver } from "./favicon-cache";
+import { ShortcutIconResolver } from "./shortcut-icon";
 import { createEmptyEmbedBlock } from "./embed-state";
 import { TextInputModal } from "./modals";
 import { WebDeskSettingTab } from "./settings";
@@ -38,6 +39,7 @@ export default class WebDeskPlugin extends Plugin {
   private viewTransform: CanvasTransform = { panX: 0, panY: 0, zoom: 1 };
   private saveDataTimer: number | null = null;
   private favicons!: FaviconResolver;
+  private shortcutIcons!: ShortcutIconResolver;
 
   async onload(): Promise<void> {
     await this.loadDataInto();
@@ -48,6 +50,7 @@ export default class WebDeskPlugin extends Plugin {
       defaultMod: true,
     });
     this.favicons = new FaviconResolver(this.app, () => this.settings.imageFolder);
+    this.shortcutIcons = new ShortcutIconResolver(this.app, () => this.settings.imageFolder);
 
     const host: WebDeskHost = {
       getSettings: () => this.settings,
@@ -86,6 +89,7 @@ export default class WebDeskPlugin extends Plugin {
         this.saveDataDebounced();
       },
       resolveFavicon: (host) => this.favicons.resolve(host),
+      resolveShortcutIcon: (shortcut) => this.shortcutIcons.resolve(shortcut),
     };
     this.registerView(VIEW_TYPE_WEB_DESK, (leaf) => new WebDeskView(leaf, host));
 
@@ -150,6 +154,7 @@ export default class WebDeskPlugin extends Plugin {
           () => void this.saveSettings(),
           undefined,
           (host) => this.favicons.resolve(host),
+          (shortcut) => this.shortcutIcons.resolve(shortcut),
         );
         ctx.addChild(embed);
         embed.render();

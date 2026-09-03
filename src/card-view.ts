@@ -1,4 +1,6 @@
+import { setIcon } from "obsidian";
 import { renderCardPropertyIndicators } from "./card-properties-ui";
+import { shortcutKindIcon, type LocalShortcutKind } from "./shortcut-state";
 import {
   cardPlacementFrame,
   normalizeCardViewMode,
@@ -189,7 +191,55 @@ function renderEmbedCard(el: HTMLElement, card: WebCardVisualModel): void {
   });
 }
 
-function renderCaption(el: HTMLElement, card: WebCardVisualModel): void {
+/** 本机快捷方式：系统图标不套瓦片，加载前用种类占位图标。 */
+export interface ShortcutCardVisualModel extends CardPlacement {
+  title: string;
+  kind: LocalShortcutKind;
+  rating?: number;
+  note?: string;
+  caption?: string;
+  captionEditing?: boolean;
+  onCaptionInput?: (value: string) => void;
+  onCaptionCommit?: (value: string) => void;
+  /** 路径在本机不存在时降为提示态，但保留布局与属性。 */
+  missing?: boolean;
+  resolveIcon?: () => Promise<string | null>;
+}
+
+export function renderShortcutCardVisual(el: HTMLElement, card: ShortcutCardVisualModel): void {
+  el.setAttribute("data-slot", "shortcut-card");
+  el.setAttribute("data-view-mode", "icon");
+  el.setAttribute("data-shortcut-kind", card.kind);
+  el.removeClass("is-preview", "is-embed", "is-card-surface");
+  el.toggleClass("is-shortcut-missing", Boolean(card.missing));
+  updateWebCardElementFrame(el, { ...card, viewMode: "icon" });
+
+  const thumb = el.createDiv({ cls: `web-desk-icon-thumb web-desk-shortcut-thumb is-${card.kind}` });
+  const placeholder = thumb.createDiv({ cls: "web-desk-shortcut-placeholder" });
+  setIcon(placeholder, shortcutKindIcon(card.kind));
+  if (card.resolveIcon) {
+    void card.resolveIcon().then((src) => {
+      if (!src || !thumb.isConnected) return;
+      const image = thumb.createEl("img", {
+        cls: "web-desk-shortcut-img is-loading",
+        attr: { src, alt: "", draggable: "false", "aria-hidden": "true" },
+      });
+      image.addEventListener("load", () => {
+        image.removeClass("is-loading");
+        placeholder.remove();
+      });
+      image.addEventListener("error", () => image.remove());
+    });
+  }
+  renderCardPropertyIndicators(thumb, card.rating, card.note);
+  el.createDiv({ cls: "web-desk-icon-label", text: card.title });
+  renderCaption(el, card);
+}
+
+function renderCaption(
+  el: HTMLElement,
+  card: Pick<WebCardVisualModel, "caption" | "captionEditing" | "onCaptionInput" | "onCaptionCommit">,
+): void {
   if (!card.caption && !card.captionEditing) return;
   const input = el.createEl("textarea", {
     cls: "web-desk-card-caption",

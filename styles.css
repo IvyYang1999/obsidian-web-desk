@@ -217,8 +217,58 @@
 
 /* 图标异步解析：先显示首字母色块，远程图标加载完成后再替换，避免闪烁和破图。 */
 .web-desk-icon-img.is-loading,
-.web-desk-preview-favicon.is-loading {
+.web-desk-preview-favicon.is-loading,
+.web-desk-shortcut-img.is-loading {
   display: none;
+}
+
+/* 本机快捷方式：macOS 图标自带形状，不套瓦片；加载前用种类占位图标。 */
+.web-desk-shortcut-thumb {
+  background-color: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.web-desk-icon:hover .web-desk-shortcut-thumb {
+  border-color: transparent;
+  background-color: color-mix(in srgb, var(--background-modifier-hover) 60%, transparent);
+  box-shadow: none;
+}
+
+.web-desk-icon.is-selected .web-desk-shortcut-thumb,
+.web-desk-icon:focus-visible .web-desk-shortcut-thumb {
+  border-color: transparent;
+  background-color: color-mix(in srgb, var(--interactive-accent) 10%, transparent);
+  box-shadow: var(--wd-selection-ring);
+}
+
+.web-desk-shortcut-placeholder {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--text-faint);
+}
+
+.web-desk-shortcut-placeholder svg {
+  width: 42%;
+  height: 42%;
+  stroke-width: 1.4;
+}
+
+.web-desk-shortcut-img {
+  width: 96%;
+  height: 96%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.web-desk-icon.is-shortcut-missing .web-desk-shortcut-thumb {
+  opacity: 0.5;
+}
+
+.web-desk-icon.is-shortcut-missing .web-desk-icon-label {
+  color: var(--text-muted);
 }
 
 .web-desk-file-thumb {

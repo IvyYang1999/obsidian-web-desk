@@ -35,7 +35,12 @@ import { CanvasFileSuggestModal, CardPropertiesModal, ConfirmModal, PreviewFileS
 import { normalizeCardRating } from "./card-properties-state";
 import { normalizeCardCaption } from "./card-caption-state";
 import { cardAccessibleLabel } from "./card-properties-ui";
-import { renderWebCardVisual, updateWebCardElementFrame } from "./card-view";
+import { renderShortcutCardVisual, renderWebCardVisual, updateWebCardElementFrame } from "./card-view";
+import { localFilePathsFromDrop } from "./file-link-storage";
+import { localShortcutCandidates, normalizeShortcutKind, shortcutKindIcon, shortcutKindLabel, type LocalShortcut } from "./shortcut-state";
+import { describeLocalShortcut } from "./shortcut-importer";
+import { launchLocalShortcutWithNotice, localShortcutExists, revealLocalShortcut } from "./shortcut-launch";
+import type { ShortcutIconResolve } from "./shortcut-icon";
 import type { FaviconResolve } from "./favicon-cache";
 import {
   cardPlacementFrame,
@@ -222,6 +227,7 @@ export class DeskEmbed extends MarkdownRenderChild {
   private fullscreenFocusBoundary: CanvasFocusBoundary | null = null;
   private canvasFileCache = new Map<string, { isCanvas: boolean; mtime: number }>();
   private resolveFavicon?: FaviconResolve;
+  private resolveShortcutIcon?: ShortcutIconResolve;
   /** 上一实例交来的、尚未在本实例 DOM 上落实的状态；被再次接管时必须原样传下去。 */
   private pendingHandoff: EmbedInstanceHandoff | null = null;
 
@@ -234,6 +240,7 @@ export class DeskEmbed extends MarkdownRenderChild {
     onSettingsChange?: () => void,
     navigation?: CanvasNavigationDelegate,
     resolveFavicon?: FaviconResolve,
+    resolveShortcutIcon?: ShortcutIconResolve,
   ) {
     super(el);
     this.el = el;
@@ -244,6 +251,7 @@ export class DeskEmbed extends MarkdownRenderChild {
     this.onSettingsChange = onSettingsChange;
     this.navigation = navigation;
     this.resolveFavicon = resolveFavicon;
+    this.resolveShortcutIcon = resolveShortcutIcon;
     this.sourceMarker = source.trim();
     this.data = parseEmbedData(source);
   }
@@ -277,7 +285,7 @@ export class DeskEmbed extends MarkdownRenderChild {
     this.hintEl.createDiv({ cls: "web-desk-hint-title", text: "把第一个网页放进来" });
     this.hintEl.createDiv({
       cls: "web-desk-hint-body",
-      text: "粘贴链接，或拖入网页、Markdown、PDF 与图片。",
+      text: "粘贴链接，或拖入网页、Markdown、PDF、图片与本机应用。",
     });
     const hintButton = this.hintEl.createEl("button", { cls: "web-desk-hint-action", text: "收藏 URL" });
     hintButton.addEventListener("click", (event) => { event.stopPropagation(); this.promptForEmbedUrl(this.visibleCenter()); });
@@ -511,7 +519,28 @@ export class DeskEmbed extends MarkdownRenderChild {
     if (item.objectGroup) el.addClass("is-object-grouped");
     el.style.left = `${item.x}px`;
     el.style.top = `${item.y}px`;
-    if (item.path) {
+    if (item.appPath) {
+      const shortcut = this.itemShortcut(item);
+      el.addClass("is-local-shortcut");
+      renderShortcutCardVisual(el, {
+        x: item.x,
+        y: item.y,
+        size,
+        viewMode: "icon",
+        title: item.title || shortcut.name,
+        kind: shortcut.kind,
+        rating: item.rating,
+        note: item.note,
+        caption: item.caption,
+        captionEditing: this.editingCaptionRef === embedItemRef(item),
+        onCaptionInput: (value) => { item.caption = value; },
+        onCaptionCommit: (value) => this.persistEmbedCaption(item, value),
+        missing: !localShortcutExists(shortcut.path),
+        resolveIcon: this.resolveShortcutIcon
+          ? () => this.resolveShortcutIcon!(shortcut)
+          : undefined,
+      });
+    } else if (item.path) {
       el.addClass("is-file-link");
       const file = this.app.vault.getAbstractFileByPath(item.path);
       renderFileCardVisual(this.app, this, el, {
@@ -910,17 +939,25 @@ export class DeskEmbed extends MarkdownRenderChild {
     if (item && target) {
       const isCanvasReference = Boolean(item.path && this.canvasFileCache.get(item.path)?.isCanvas);
       const fileKind = item.path ? canvasFileKind(item.path) : null;
-      identity = isCanvasReference
-        ? { icon: "panels-top-left", label: "画布" }
-        : item.path
-          ? { icon: fileKind === "pdf" ? "file-type-2" : "file-text", label: canvasFileKindLabel(item.path) }
-          : { icon: "globe-2", label: "网页" };
+      const shortcutKind = item.appPath ? normalizeShortcutKind(item.appKind) : null;
+      identity = shortcutKind
+        ? { icon: shortcutKindIcon(shortcutKind), label: shortcutKindLabel(shortcutKind) }
+        : isCanvasReference
+          ? { icon: "panels-top-left", label: "画布" }
+          : item.path
+            ? { icon: fileKind === "pdf" ? "file-type-2" : "file-text", label: canvasFileKindLabel(item.path) }
+            : { icon: "globe-2", label: "网页" };
       actions.push({
-        icon: isCanvasReference ? "corner-down-right" : "external-link",
-        label: isCanvasReference ? "进入画布" : item.path ? "打开笔记" : "打开网页",
+        icon: item.appPath ? "play" : isCanvasReference ? "corner-down-right" : "external-link",
+        label: item.appPath ? "启动" : isCanvasReference ? "进入画布" : item.path ? "打开笔记" : "打开网页",
         onClick: () => { void this.activateItem(item); },
       });
-      if (item.path && !isCanvasReference && supportsCanvasFilePreview(item.path)) {
+      if (item.appPath) {
+        actions.push(
+          { icon: "folder-open", label: "在 Finder 中显示", onClick: () => revealLocalShortcut(this.itemShortcut(item)) },
+          { icon: "square-pen", label: "编辑名称、评分与备注", onClick: () => this.editWebItemProperties(item) },
+        );
+      } else if (item.path && !isCanvasReference && supportsCanvasFilePreview(item.path)) {
         const mode = normalizeCardViewMode(item.viewMode);
         actions.push(
           { icon: "maximize-2", label: "全屏预览", onClick: () => this.previewCanvasFile(item.path!) },
@@ -961,6 +998,7 @@ export class DeskEmbed extends MarkdownRenderChild {
   }
 
   private showCardModeMenu(item: EmbedItem, trigger: HTMLElement): void {
+    if (item.appPath) return;
     const current = normalizeCardViewMode(item.viewMode);
     const menu = new Menu();
     const modes: Array<{ mode: CardViewMode; label: string; icon: string }> = [
@@ -2130,7 +2168,15 @@ export class DeskEmbed extends MarkdownRenderChild {
     this.onEmbedObjectPointerDown(event, embedItemRef(item), el);
   }
 
+  private itemShortcut(item: EmbedItem): LocalShortcut {
+    return { path: item.appPath ?? "", name: item.appName || item.title, kind: normalizeShortcutKind(item.appKind) };
+  }
+
   private async activateItem(item: EmbedItem): Promise<void> {
+    if (item.appPath) {
+      await launchLocalShortcutWithNotice(this.itemShortcut(item));
+      return;
+    }
     if (!item.path) {
       window.open(item.url, "_blank");
       return;
@@ -2210,6 +2256,7 @@ export class DeskEmbed extends MarkdownRenderChild {
       originLabel: originFile instanceof TFile ? originFile.basename : "当前画布",
       originPath: this.filePath,
       resolveFavicon: this.resolveFavicon,
+      resolveShortcutIcon: this.resolveShortcutIcon,
     });
     void this.drilldown.open(path);
   }
@@ -2313,6 +2360,15 @@ export class DeskEmbed extends MarkdownRenderChild {
           new Notice("已复制双链");
         }
       }));
+    } else if (item.appPath) {
+      const shortcut = this.itemShortcut(item);
+      menu.addItem((m) => m.setTitle("启动").setIcon("play").onClick(() => void launchLocalShortcutWithNotice(shortcut)));
+      menu.addItem((m) => m.setTitle("在 Finder 中显示").setIcon("folder-open").onClick(() => revealLocalShortcut(shortcut)));
+      menu.addItem((m) => m.setTitle("复制路径").setIcon("copy").onClick(() => {
+        void navigator.clipboard.writeText(shortcut.path);
+        new Notice("已复制路径");
+      }));
+      menu.addItem((m) => m.setTitle("编辑名称、评分与备注…").setIcon("square-pen").onClick(() => this.editWebItemProperties(item)));
     } else {
       menu.addItem((m) => m.setTitle("打开网页").setIcon("external-link").onClick(() => window.open(item.url, "_blank")));
       if (item.bookmarkPath) {
@@ -2992,6 +3048,11 @@ export class DeskEmbed extends MarkdownRenderChild {
       new Notice("这个 Markdown/PDF 不在当前 Vault 中；请先移入 Vault 再拖到画布");
       return;
     }
+    const shortcutPaths = localShortcutCandidates(localFilePathsFromDrop(event.dataTransfer));
+    if (shortcutPaths.length > 0) {
+      this.addLocalShortcuts(shortcutPaths, point);
+      return;
+    }
     const text =
       event.dataTransfer?.getData("text/uri-list") ||
       event.dataTransfer?.getData("text/plain") ||
@@ -3035,6 +3096,39 @@ export class DeskEmbed extends MarkdownRenderChild {
     this.updateHint();
     this.scheduleWrite(true);
     new Notice(`已插入 ${added} 个文件卡片`);
+  }
+
+  /** 本机应用 / 文件夹 / 文件拖入文内画布：条目直接记录路径与名称，不生成 Markdown。 */
+  addLocalShortcuts(paths: string[], point: { x: number; y: number }): void {
+    let added = 0;
+    for (const path of paths) {
+      const shortcut = describeLocalShortcut(path);
+      if (this.data.items.some((item) => item.appPath === shortcut.path)) {
+        new Notice(`${shortcut.name} 已经在画布上了`);
+        continue;
+      }
+      const position = findAvailableEmbedItemPosition(this.data, {
+        x: Math.round(point.x - 48 + added * 132),
+        y: Math.round(point.y - 48),
+      });
+      this.data.items.push({
+        url: "",
+        appPath: shortcut.path,
+        appName: shortcut.name,
+        appKind: shortcut.kind,
+        title: shortcut.name,
+        x: position.x,
+        y: position.y,
+        size: 96,
+      });
+      added += 1;
+    }
+    if (added === 0) return;
+    this.recomputeEmbedGroupMembership();
+    this.renderItems();
+    this.updateHint();
+    this.scheduleWrite(true);
+    new Notice(`已添加 ${added} 个本机快捷方式`);
   }
 
   private async onPaste(event: ClipboardEvent): Promise<void> {
@@ -3268,6 +3362,7 @@ interface CanvasDrilldownOptions {
   originLabel: string;
   originPath?: string;
   resolveFavicon?: FaviconResolve;
+  resolveShortcutIcon?: ShortcutIconResolve;
 }
 
 /**
@@ -3276,6 +3371,7 @@ interface CanvasDrilldownOptions {
  */
 export class CanvasDrilldown {
   private readonly resolveFavicon?: FaviconResolve;
+  private readonly resolveShortcutIcon?: ShortcutIconResolve;
   private readonly app: App;
   private readonly hostEl: HTMLElement;
   private readonly settings: WebDeskSettings;
@@ -3296,6 +3392,7 @@ export class CanvasDrilldown {
     this.originLabel = options.originLabel;
     this.originPath = options.originPath;
     this.resolveFavicon = options.resolveFavicon;
+    this.resolveShortcutIcon = options.resolveShortcutIcon;
   }
 
   async open(path: string): Promise<void> {
@@ -3396,6 +3493,7 @@ export class CanvasDrilldown {
       this.onSettingsChange,
       { openCanvas: (targetPath) => { void this.open(targetPath); } },
       this.resolveFavicon,
+      this.resolveShortcutIcon,
     );
     child.render();
     childHost.querySelector<HTMLElement>(".web-desk-embed")?.addClass("is-drilldown-surface");

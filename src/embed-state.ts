@@ -5,11 +5,16 @@ import { cardPlacementFrame, normalizeCardViewMode } from "./card-view-state";
 import type { CardStyle } from "./canvas-ui-state";
 import { findFreePosition } from "./canvas-free-position";
 import { RATING_HEIGHT, RATING_WIDTH } from "./rating-state";
+import { shortcutRef, type LocalShortcutKind } from "./shortcut-state";
 
 export interface EmbedItem {
   url: string;
   /** Vault 内 Markdown 路径；存在时该条目是文件卡片，url 保持空字符串。 */
   path?: string;
+  /** 本机快捷方式的绝对路径；存在时 url 与 path 均为空。 */
+  appPath?: string;
+  appName?: string;
+  appKind?: LocalShortcutKind;
   /** 网页收藏对应的 Markdown；与 path（普通文件卡片）语义分离。 */
   bookmarkPath?: string;
   title: string;
@@ -29,7 +34,8 @@ export interface EmbedItem {
   objectGroup?: string;
 }
 
-export function embedItemRef(item: Pick<EmbedItem, "url" | "path">): string {
+export function embedItemRef(item: Pick<EmbedItem, "url" | "path" | "appPath">): string {
+  if (item.appPath) return shortcutRef(item.appPath);
   return item.path ? `file:${item.path}` : item.url;
 }
 

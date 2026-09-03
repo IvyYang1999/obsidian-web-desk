@@ -45,6 +45,7 @@
 - `web-desk-toolbar`：只放视图级短操作，按钮统一使用 `web-desk-tool-btn`；画布浮动控件使用 32px 紧凑桌面规格。
 - `web-desk-create-rail`：两种画布共享的可见创建入口，与 Obsidian Canvas 一样放在底部居中；一级只保留添加、文本、分组、更多四项，细分动作进入原生菜单；按钮与对象工具栏共享紧凑尺寸和 16px 图标。新建文本框按矩形找最近空位并自动选中。
 - `web-desk-icon`：网页收藏；视觉重心是方形缩略图和两行标题。
+- `web-desk-shortcut-thumb`：本机应用 / 文件夹 / 文件的快捷方式。系统图标自带形状，不套瓦片；加载前显示种类占位图标，路径在本机不存在时半透明。主画布一个快捷方式 = 收藏夹里一个 Markdown（`app_path` 是身份、`app_name` 供跨机器按名启动），文内画布条目直接记 `appPath`。单击选中、双击或工具栏「启动」交给系统打开；图标由 `ShortcutIconResolver` 通过 NSWorkspace 取 256px PNG 缓存在 `<imageFolder>/应用图标/`（仅 macOS）。
 - `web-desk-rating`：1–5 星评分，160×56 的一行星星，不是卡片；独立评分只有星星，绑定评分在星星上方显示目标名，链接失效时保留评分并使用 missing 状态。
 - `web-desk-image`：Vault 图片附件；拖动主体，右下角手柄等比例缩放。
 - `web-desk-textbox`：自由备注；允许非等比例调整。默认只显示文字，边框和底色是显式可选外观。

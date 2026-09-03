@@ -1,6 +1,7 @@
 import type { App } from "obsidian";
 import type { CardViewMode } from "./card-view-state";
 import type { CardStyle } from "./canvas-ui-state";
+import type { LocalShortcutKind } from "./shortcut-state";
 
 /** 分组与文本框共享的可选容器外观；缺字段代表干净的无容器模式。 */
 export interface CanvasContainerAppearance {
@@ -126,6 +127,11 @@ export interface BookmarkCard {
   path: string;
   /** 文件卡片指向的 Vault 内 Markdown；空字符串表示普通网页收藏。 */
   targetPath: string;
+  /** 本机快捷方式的绝对路径（应用 / 文件夹 / 文件）；空字符串表示不是快捷方式。 */
+  appPath: string;
+  /** 跨机器按名启动用的应用名。 */
+  appName: string;
+  appKind: LocalShortcutKind;
   title: string;
   url: string;
   host: string;

@@ -80,15 +80,21 @@ function readVaultBasePath(app: App): string {
   return typeof adapter.basePath === "string" ? adapter.basePath.replace(/\/$/, "") : "";
 }
 
-function candidatesFromDrop(data: DataTransfer): string[] {
+/** Finder / 系统拖入文件的绝对路径（Electron 暴露 file.path 或 webUtils）。 */
+export function localFilePathsFromDrop(data: DataTransfer | null): string[] {
+  if (!data) return [];
   const electron = (window as typeof window & {
     electron?: { webUtils?: { getPathForFile?: (file: File) => string } };
   }).electron;
-  const filePaths = Array.from(data.files ?? [])
+  return Array.from(data.files ?? [])
     .map((file) =>
       (file as File & { path?: string }).path || electron?.webUtils?.getPathForFile?.(file) || "",
     )
     .filter(Boolean);
+}
+
+function candidatesFromDrop(data: DataTransfer): string[] {
+  const filePaths = localFilePathsFromDrop(data);
   return extractMarkdownLinkCandidates({
     html: data.getData("text/html"),
     text: data.getData("text/plain") || data.getData("text"),

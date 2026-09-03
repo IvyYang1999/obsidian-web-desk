@@ -16,6 +16,12 @@ import {
   markdownFilesFromDrop,
 } from "./file-link-storage";
 import { planAutoPositions, readCard, writeDeskFields } from "./layout";
+import { localFilePathsFromDrop } from "./file-link-storage";
+import { localShortcutCandidates, shortcutKindIcon, shortcutKindLabel, type LocalShortcut } from "./shortcut-state";
+import { createLocalShortcutNote, describeLocalShortcut } from "./shortcut-importer";
+import { launchLocalShortcutWithNotice, localShortcutExists, revealLocalShortcut } from "./shortcut-launch";
+import type { ShortcutIconResolve } from "./shortcut-icon";
+import { renderShortcutCardVisual } from "./card-view";
 import type { FaviconResolve } from "./favicon-cache";
 import { applyRecentLayoutWrite, RecentLayoutWrite } from "./layout-state";
 import { CanvasFileSuggestModal, CardPropertiesModal, ConfirmModal, PreviewFileSuggestModal, TextInputModal } from "./modals";
@@ -134,6 +140,8 @@ export interface WebDeskHost {
   setBlockedEmbedHosts(hosts: string[]): void;
   /** 网站图标解析（Vault 缓存 + 远程择优）；缺省时退回首字母色块。 */
   resolveFavicon?: FaviconResolve;
+  /** 本机应用 / 文件夹 / 文件的系统图标；缺省时用种类占位图标。 */
+  resolveShortcutIcon?: ShortcutIconResolve;
 }
 
 interface Point {
@@ -272,7 +280,7 @@ export class WebDeskView extends ItemView {
     this.hintEl.createDiv({ cls: "web-desk-hint-title", text: "把第一个网页放进来" });
     this.hintEl.createDiv({
       cls: "web-desk-hint-body",
-      text: "粘贴链接，或拖入网页、Markdown、PDF 与图片。",
+      text: "粘贴链接，或拖入网页、Markdown、PDF、图片与本机应用。",
     });
     const hintButton = this.hintEl.createEl("button", { cls: "web-desk-hint-action", text: "收藏 URL" });
     hintButton.addEventListener("click", (event) => {
@@ -526,6 +534,27 @@ export class WebDeskView extends ItemView {
       });
       const icon = el.querySelector<HTMLElement>(".web-desk-file-icon, .web-desk-file-card-icon");
       if (icon) void this.decorateCanvasReference(card.targetPath, el, icon);
+    } else if (card.appPath) {
+      const shortcut = this.cardShortcut(card);
+      el.addClass("is-local-shortcut");
+      renderShortcutCardVisual(el, {
+        x: card.x,
+        y: card.y,
+        size: card.size,
+        viewMode: "icon",
+        title: card.title,
+        kind: shortcut.kind,
+        rating: card.rating,
+        note: card.note,
+        caption: card.caption,
+        captionEditing: this.editingCaptionPath === card.path,
+        onCaptionInput: (value) => { card.caption = value; },
+        onCaptionCommit: (value) => void this.persistCardCaption(card, value),
+        missing: !localShortcutExists(shortcut.path),
+        resolveIcon: this.host.resolveShortcutIcon
+          ? () => this.host.resolveShortcutIcon!(shortcut)
+          : undefined,
+      });
     } else {
       renderWebCardVisual(el, {
         ...card,
@@ -1057,7 +1086,15 @@ export class WebDeskView extends ItemView {
     });
   }
 
+  private cardShortcut(card: BookmarkCard): LocalShortcut {
+    return { path: card.appPath, name: card.appName || card.title, kind: card.appKind };
+  }
+
   private async activateCard(card: BookmarkCard): Promise<void> {
+    if (card.appPath) {
+      await launchLocalShortcutWithNotice(this.cardShortcut(card));
+      return;
+    }
     if (card.targetPath) {
       if (await this.isCanvasReference(card.targetPath)) {
         this.openCanvasReference(card.targetPath);
@@ -1124,6 +1161,7 @@ export class WebDeskView extends ItemView {
       onSettingsChange: () => this.host.setBlockedEmbedHosts(this.settings.blockedEmbedHosts),
       originLabel: "网页桌面",
       resolveFavicon: this.host.resolveFavicon,
+      resolveShortcutIcon: this.host.resolveShortcutIcon,
     });
     void this.drilldown.open(path);
   }
@@ -1193,6 +1231,31 @@ export class WebDeskView extends ItemView {
             new Notice("已复制双链");
           }
         }));
+    } else if (card.appPath) {
+      const shortcut = this.cardShortcut(card);
+      menu.addItem((item) => item
+        .setTitle("启动")
+        .setIcon("play")
+        .onClick(() => void launchLocalShortcutWithNotice(shortcut)));
+      menu.addItem((item) => item
+        .setTitle("在 Finder 中显示")
+        .setIcon("folder-open")
+        .onClick(() => revealLocalShortcut(shortcut)));
+      menu.addItem((item) => item
+        .setTitle("复制路径")
+        .setIcon("copy")
+        .onClick(() => {
+          void navigator.clipboard.writeText(shortcut.path);
+          new Notice("已复制路径");
+        }));
+      menu.addItem((item) => item
+        .setTitle("打开 Markdown")
+        .setIcon("file-text")
+        .onClick(() => this.openMarkdown(card)));
+      menu.addItem((item) => item
+        .setTitle("编辑名称、评分与备注…")
+        .setIcon("square-pen")
+        .onClick(() => this.editWebCardProperties(card)));
     } else {
       menu.addItem((item) => item
         .setTitle("打开网页")
@@ -1292,6 +1355,7 @@ export class WebDeskView extends ItemView {
   }
 
   private async setCardViewMode(card: BookmarkCard, mode: CardViewMode, retry = false): Promise<void> {
+    if (card.appPath) return;
     if (mode === "embed" && !card.targetPath) {
       const statusId = `embed:${card.path}`;
       const pending: PendingWebCard = {
@@ -1642,17 +1706,24 @@ export class WebDeskView extends ItemView {
     if (card && target) {
       const isCanvasReference = Boolean(card.targetPath && this.canvasFileCache.get(card.targetPath)?.isCanvas);
       const fileKind = card.targetPath ? canvasFileKind(card.targetPath) : null;
-      identity = isCanvasReference
-        ? { icon: "panels-top-left", label: "画布" }
-        : card.targetPath
-          ? { icon: fileKind === "pdf" ? "file-type-2" : "file-text", label: canvasFileKindLabel(card.targetPath) }
-          : { icon: "globe-2", label: "网页" };
+      identity = card.appPath
+        ? { icon: shortcutKindIcon(card.appKind), label: shortcutKindLabel(card.appKind) }
+        : isCanvasReference
+          ? { icon: "panels-top-left", label: "画布" }
+          : card.targetPath
+            ? { icon: fileKind === "pdf" ? "file-type-2" : "file-text", label: canvasFileKindLabel(card.targetPath) }
+            : { icon: "globe-2", label: "网页" };
       actions.push({
-        icon: isCanvasReference ? "corner-down-right" : "external-link",
-        label: isCanvasReference ? "进入画布" : card.targetPath ? "打开笔记" : "打开网页",
+        icon: card.appPath ? "play" : isCanvasReference ? "corner-down-right" : "external-link",
+        label: card.appPath ? "启动" : isCanvasReference ? "进入画布" : card.targetPath ? "打开笔记" : "打开网页",
         onClick: () => { void this.activateCard(card); },
       });
-      if (card.targetPath && !isCanvasReference && supportsCanvasFilePreview(card.targetPath)) {
+      if (card.appPath) {
+        actions.push(
+          { icon: "folder-open", label: "在 Finder 中显示", onClick: () => revealLocalShortcut(this.cardShortcut(card)) },
+          { icon: "square-pen", label: "编辑名称、评分与备注", onClick: () => this.editWebCardProperties(card) },
+        );
+      } else if (card.targetPath && !isCanvasReference && supportsCanvasFilePreview(card.targetPath)) {
         actions.push(
           { icon: "maximize-2", label: "全屏预览", onClick: () => this.previewCanvasFile(card.targetPath) },
           { icon: "panels-top-left", label: "切换展示方式", text: card.viewMode === "embed" ? "嵌入" : card.viewMode === "preview" ? "卡片" : "图标", onClick: (button) => this.showCardModeMenu(card, button) },
@@ -3327,6 +3398,11 @@ export class WebDeskView extends ItemView {
       new Notice("这个 Markdown/PDF 不在当前 Vault 中；请先移入 Vault 再拖到画布");
       return;
     }
+    const shortcutPaths = localShortcutCandidates(localFilePathsFromDrop(event.dataTransfer));
+    if (shortcutPaths.length > 0) {
+      await this.importLocalShortcuts(shortcutPaths, point);
+      return;
+    }
     const text =
       event.dataTransfer?.getData("text/uri-list") ||
       event.dataTransfer?.getData("text/plain") ||
@@ -3356,8 +3432,8 @@ export class WebDeskView extends ItemView {
           continue;
         }
         const dropPoint = {
-          x: point.x + index * 32,
-          y: point.y + index * 32,
+          x: point.x + index * (this.settings.defaultIconSize + 36),
+          y: point.y,
         };
         const result = await createMarkdownShortcut(this.app, this.settings, target, dropPoint);
         const x = Math.round(dropPoint.x - this.settings.defaultIconSize / 2);
@@ -3373,6 +3449,42 @@ export class WebDeskView extends ItemView {
       }
     } catch (error) {
       new Notice(`插入文件失败：${getErrorMessage(error)}`, 6000);
+    } finally {
+      this.interactionLock -= 1;
+    }
+    await this.refresh();
+  }
+
+  /** 本机应用 / 文件夹 / 文件拖入：每个路径一个收藏 Markdown，图标由系统提供。 */
+  async importLocalShortcuts(paths: string[], point: Point): Promise<void> {
+    this.interactionLock += 1;
+    try {
+      for (let index = 0; index < paths.length; index += 1) {
+        const shortcut = describeLocalShortcut(paths[index]);
+        const existing = this.cards.find((card) => card.appPath === shortcut.path);
+        if (existing) {
+          this.selected = new Set([existing.path]);
+          new Notice(`${shortcut.name} 已经在画布上了`);
+          continue;
+        }
+        // 多个一起拖入时按图标宽度横向排开，而不是斜向叠放。
+        const dropPoint = { x: point.x + index * (this.settings.defaultIconSize + 36), y: point.y };
+        const result = await createLocalShortcutNote(this.app, this.settings, shortcut, dropPoint);
+        const x = Math.round(dropPoint.x - this.settings.defaultIconSize / 2);
+        const y = Math.round(dropPoint.y - this.settings.defaultIconSize / 2);
+        await writeDeskFields(this.app, result.file, {
+          x, y, size: this.settings.defaultIconSize, hidden: null,
+        });
+        this.hiddenWrites.delete(result.file.path);
+        this.layoutWrites.set(result.file.path, {
+          x, y, size: this.settings.defaultIconSize, at: Date.now(),
+        });
+        new Notice(result.created
+          ? `已添加${shortcutKindLabel(shortcut.kind)}：${shortcut.name}`
+          : `${shortcut.name} 已经在画布上了`);
+      }
+    } catch (error) {
+      new Notice(`添加快捷方式失败：${getErrorMessage(error)}`, 6000);
     } finally {
       this.interactionLock -= 1;
     }

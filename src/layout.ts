@@ -7,7 +7,9 @@ import {
   DEFAULT_PREVIEW_HEIGHT,
   DEFAULT_PREVIEW_WIDTH,
   normalizeCardViewMode,
+  type CardViewMode,
 } from "./card-view-state";
+import { normalizeShortcutKind } from "./shortcut-state";
 import { normalizeCardStyle } from "./canvas-ui-state";
 
 export function readCard(file: TFile, app: App, defaultSize: number): BookmarkCard | null {
@@ -21,6 +23,9 @@ export function readCard(file: TFile, app: App, defaultSize: number): BookmarkCa
 
   const url = typeof fm.url === "string" ? fm.url : "";
   const targetPath = typeof fm.desk_file === "string" ? fm.desk_file : "";
+  const appPath = typeof fm.app_path === "string" ? fm.app_path.trim() : "";
+  const appName = typeof fm.app_name === "string" ? fm.app_name.trim() : "";
+  const appKind = normalizeShortcutKind(fm.type);
   const target = targetPath ? app.vault.getAbstractFileByPath(targetPath) : null;
   const title = target instanceof TFile
     ? target.basename
@@ -30,7 +35,8 @@ export function readCard(file: TFile, app: App, defaultSize: number): BookmarkCa
   const size = readNumber(fm.desk_size) ?? defaultSize;
   const group = typeof fm.desk_group === "string" ? fm.desk_group : "";
   const objectGroup = typeof fm.desk_object_group === "string" ? fm.desk_object_group : "";
-  const viewMode = normalizeCardViewMode(fm.desk_view_mode);
+  // 本机快捷方式只有图标一种外观。
+  const viewMode: CardViewMode = appPath ? "icon" : normalizeCardViewMode(fm.desk_view_mode);
   const cardStyle = normalizeCardStyle(fm.desk_card_style);
   const previewWidth = readNumber(fm.desk_preview_width) ?? DEFAULT_PREVIEW_WIDTH;
   const previewHeight = readNumber(fm.desk_preview_height) ?? DEFAULT_PREVIEW_HEIGHT;
@@ -49,6 +55,9 @@ export function readCard(file: TFile, app: App, defaultSize: number): BookmarkCa
   return {
     path: file.path,
     targetPath,
+    appPath,
+    appName,
+    appKind,
     title,
     url,
     host,
