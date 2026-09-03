@@ -35,6 +35,7 @@ import { normalizeCardRating } from "./card-properties-state";
 import { normalizeCardCaption } from "./card-caption-state";
 import { cardAccessibleLabel } from "./card-properties-ui";
 import { renderWebCardVisual, updateWebCardElementFrame } from "./card-view";
+import type { FaviconResolve } from "./favicon-cache";
 import {
   cardPlacementFrame,
   DEFAULT_PREVIEW_HEIGHT,
@@ -219,6 +220,7 @@ export class DeskEmbed extends MarkdownRenderChild {
   private filePreview: CanvasFilePreviewHandle | null = null;
   private fullscreenFocusBoundary: CanvasFocusBoundary | null = null;
   private canvasFileCache = new Map<string, { isCanvas: boolean; mtime: number }>();
+  private resolveFavicon?: FaviconResolve;
 
   constructor(
     el: HTMLElement,
@@ -228,6 +230,7 @@ export class DeskEmbed extends MarkdownRenderChild {
     settings: WebDeskSettings,
     onSettingsChange?: () => void,
     navigation?: CanvasNavigationDelegate,
+    resolveFavicon?: FaviconResolve,
   ) {
     super(el);
     this.el = el;
@@ -237,6 +240,7 @@ export class DeskEmbed extends MarkdownRenderChild {
     this.settings = settings;
     this.onSettingsChange = onSettingsChange;
     this.navigation = navigation;
+    this.resolveFavicon = resolveFavicon;
     this.sourceMarker = source.trim();
     this.data = parseEmbedData(source);
   }
@@ -534,6 +538,7 @@ export class DeskEmbed extends MarkdownRenderChild {
           void this.setEmbedCardViewMode(item, "preview");
         },
         onOpen: () => window.open(item.url, "_blank", "noopener,noreferrer"),
+        resolveIcon: this.resolveFavicon,
         fallbackKey: item.url,
       });
     }
@@ -1875,6 +1880,9 @@ export class DeskEmbed extends MarkdownRenderChild {
         return;
       }
       if (event.key === "Escape") {
+        // 与主画布一致：消费掉 Esc，避免 Obsidian 全局处理把焦点交还编辑器。
+        event.preventDefault();
+        event.stopPropagation();
         this.selectedObjects.clear();
         this.selectedGroupId = null;
         this.selectedArrowId = null;
@@ -2182,6 +2190,7 @@ export class DeskEmbed extends MarkdownRenderChild {
       onSettingsChange: this.onSettingsChange,
       originLabel: originFile instanceof TFile ? originFile.basename : "当前画布",
       originPath: this.filePath,
+      resolveFavicon: this.resolveFavicon,
     });
     void this.drilldown.open(path);
   }
@@ -3230,6 +3239,7 @@ interface CanvasDrilldownOptions {
   onSettingsChange?: () => void;
   originLabel: string;
   originPath?: string;
+  resolveFavicon?: FaviconResolve;
 }
 
 /**
@@ -3237,6 +3247,7 @@ interface CanvasDrilldownOptions {
  * 引用是惰性打开的，因此层级可以很深，同时不会递归渲染整棵画布树。
  */
 export class CanvasDrilldown {
+  private readonly resolveFavicon?: FaviconResolve;
   private readonly app: App;
   private readonly hostEl: HTMLElement;
   private readonly settings: WebDeskSettings;
@@ -3256,6 +3267,7 @@ export class CanvasDrilldown {
     this.onSettingsChange = options.onSettingsChange;
     this.originLabel = options.originLabel;
     this.originPath = options.originPath;
+    this.resolveFavicon = options.resolveFavicon;
   }
 
   async open(path: string): Promise<void> {
@@ -3355,6 +3367,7 @@ export class CanvasDrilldown {
       this.settings,
       this.onSettingsChange,
       { openCanvas: (targetPath) => { void this.open(targetPath); } },
+      this.resolveFavicon,
     );
     child.render();
     childHost.querySelector<HTMLElement>(".web-desk-embed")?.addClass("is-drilldown-surface");

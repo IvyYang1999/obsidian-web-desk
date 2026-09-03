@@ -1,5 +1,6 @@
 import { Editor, Notice, Plugin, WorkspaceLeaf } from "obsidian";
 import { DeskEmbed } from "./embed";
+import { FaviconResolver } from "./favicon-cache";
 import { createEmptyEmbedBlock } from "./embed-state";
 import { TextInputModal } from "./modals";
 import { WebDeskSettingTab } from "./settings";
@@ -36,14 +37,17 @@ export default class WebDeskPlugin extends Plugin {
   private ratings: Rating[] = [];
   private viewTransform: CanvasTransform = { panX: 0, panY: 0, zoom: 1 };
   private saveDataTimer: number | null = null;
+  private favicons!: FaviconResolver;
 
   async onload(): Promise<void> {
     await this.loadDataInto();
 
+    // 画布上悬停即弹出页面预览会遮住一大片画布；默认要求按住 Cmd/Ctrl，用户可在“页面预览”设置里改。
     this.registerHoverLinkSource("web-desk", {
       display: "网页桌面",
-      defaultMod: false,
+      defaultMod: true,
     });
+    this.favicons = new FaviconResolver(this.app, () => this.settings.imageFolder);
 
     const host: WebDeskHost = {
       getSettings: () => this.settings,
@@ -81,6 +85,7 @@ export default class WebDeskPlugin extends Plugin {
         this.settings.blockedEmbedHosts = hosts;
         this.saveDataDebounced();
       },
+      resolveFavicon: (host) => this.favicons.resolve(host),
     };
     this.registerView(VIEW_TYPE_WEB_DESK, (leaf) => new WebDeskView(leaf, host));
 
@@ -136,7 +141,16 @@ export default class WebDeskPlugin extends Plugin {
     // 笔记内嵌画布：```web-desk 代码块（数据存块内，编辑写回，oneday 同款姿势）
     this.registerMarkdownCodeBlockProcessor("web-desk", (source, el, ctx) => {
       try {
-        const embed = new DeskEmbed(el, source, this.app, ctx, this.settings, () => void this.saveSettings());
+        const embed = new DeskEmbed(
+          el,
+          source,
+          this.app,
+          ctx,
+          this.settings,
+          () => void this.saveSettings(),
+          undefined,
+          (host) => this.favicons.resolve(host),
+        );
         ctx.addChild(embed);
         embed.render();
       } catch (error) {

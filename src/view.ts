@@ -1,4 +1,4 @@
-import { ItemView, Menu, Notice, setIcon, TFile, WorkspaceLeaf } from "obsidian";
+import { ItemView, Menu, Notice, Scope, setIcon, TFile, WorkspaceLeaf } from "obsidian";
 import { CanvasDrilldown } from "./embed";
 import { resolveCanvasReference } from "./canvas-reference";
 import { importUrlAsBookmark } from "./importer";
@@ -16,6 +16,7 @@ import {
   markdownFilesFromDrop,
 } from "./file-link-storage";
 import { planAutoPositions, readCard, writeDeskFields } from "./layout";
+import type { FaviconResolve } from "./favicon-cache";
 import { applyRecentLayoutWrite, RecentLayoutWrite } from "./layout-state";
 import { CanvasFileSuggestModal, CardPropertiesModal, ConfirmModal, PreviewFileSuggestModal, TextInputModal } from "./modals";
 import { normalizeRatingValue, ratingLinkState } from "./rating-state";
@@ -130,6 +131,8 @@ export interface WebDeskHost {
   getTransform(): CanvasTransform;
   setTransform(transform: CanvasTransform): void;
   setBlockedEmbedHosts(hosts: string[]): void;
+  /** 网站图标解析（Vault 缓存 + 远程择优）；缺省时退回首字母色块。 */
+  resolveFavicon?: FaviconResolve;
 }
 
 interface Point {
@@ -198,6 +201,26 @@ export class WebDeskView extends ItemView {
   constructor(leaf: WorkspaceLeaf, host: WebDeskHost) {
     super(leaf);
     this.host = host;
+    // Obsidian 的 Keymap 在 window 捕获阶段处理 Escape（回到最近的编辑器），DOM 监听里
+    // stopPropagation 拦不住；视图自己的 Scope 会先于 app.scope 收到按键，返回 false 即吞掉。
+    this.scope = new Scope(this.app.scope);
+    this.scope.register([], "Escape", (event) => {
+      this.handleEscape(event);
+      return false;
+    });
+  }
+
+  private handleEscape(event: KeyboardEvent): void {
+    event.preventDefault();
+    if (this.arrowDraft || this.pendingArrowStart) {
+      this.cancelArrowDraft();
+      return;
+    }
+    this.selected.clear();
+    this.selectedGroupId = null;
+    this.clearArrowSelection();
+    this.syncSelection();
+    this.rootEl.focus({ preventScroll: true });
   }
 
   getViewType(): string {
@@ -374,8 +397,21 @@ export class WebDeskView extends ItemView {
 
   /** 给没有坐标的卡片（手动移进收藏夹的旧文件）规划网格落点并写回。 */
   private async autoPlaceNewcomers(): Promise<void> {
-    const plan = planAutoPositions(this.cards);
-    if (plan.size === 0 || this.autoPlaceRunning) {
+    if (this.autoPlaceRunning || this.cards.every((card) => card.placed)) return;
+    // 新卡片要避开所有可见对象（不只是已放置的图标格子），并落在当前视口中心附近。
+    const unplaced = new Set(this.cards.filter((card) => !card.placed).map((card) => card.path));
+    const occupied = [
+      ...this.allViewObjects()
+        .filter((object) => !(object.kind === "card" && unplaced.has(object.id)))
+        .map(({ x, y, w, h }) => ({ x, y, w, h })),
+      ...this.host.getGroups().map((group) => ({ x: group.x, y: group.y, w: group.w, h: group.h })),
+    ];
+    const rect = this.rootEl.getBoundingClientRect();
+    const origin = rect.width > 0 && rect.height > 0
+      ? this.clientToCanvas(rect.left + rect.width / 2, rect.top + rect.height / 2)
+      : undefined;
+    const plan = planAutoPositions(this.cards, { occupied, origin });
+    if (plan.size === 0) {
       return;
     }
     this.autoPlaceRunning = true;
@@ -497,6 +533,7 @@ export class WebDeskView extends ItemView {
           void this.setCardViewMode(card, "preview");
         },
         onOpen: () => window.open(card.url, "_blank", "noopener,noreferrer"),
+        resolveIcon: this.host.resolveFavicon,
         fallbackKey: card.path,
       });
     }
@@ -825,14 +862,9 @@ export class WebDeskView extends ItemView {
       return;
     }
     if (event.key === "Escape") {
-      if (this.arrowDraft || this.pendingArrowStart) {
-        this.cancelArrowDraft();
-        return;
-      }
-      this.selected.clear();
-      this.selectedGroupId = null;
-      this.clearArrowSelection();
-      this.syncSelection();
+      // 主路径走视图 Scope（见构造函数）；这里兜底处理焦点在画布内部元素上的情况。
+      event.stopPropagation();
+      this.handleEscape(event);
       return;
     }
     const isDeleteKey = event.key === "Delete" || event.key === "Backspace";
@@ -1084,6 +1116,7 @@ export class WebDeskView extends ItemView {
       settings: this.settings,
       onSettingsChange: () => this.host.setBlockedEmbedHosts(this.settings.blockedEmbedHosts),
       originLabel: "网页桌面",
+      resolveFavicon: this.host.resolveFavicon,
     });
     void this.drilldown.open(path);
   }

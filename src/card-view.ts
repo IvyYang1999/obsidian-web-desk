@@ -22,6 +22,8 @@ export interface WebCardVisualModel extends CardPlacement {
   onCaptionCommit?: (value: string) => void;
   onEmbedFallback?: () => void;
   onOpen?: () => void;
+  /** 网站图标解析器；缺省时直接请求远程 favicon 并在失败时回落首字母。 */
+  resolveIcon?: (host: string) => Promise<string | null>;
   fallbackKey: string;
 }
 
@@ -67,20 +69,37 @@ export function updateWebCardElementFrame(el: HTMLElement, card: CardPlacement):
 
 function renderIconCard(el: HTMLElement, card: WebCardVisualModel): void {
   const thumb = el.createDiv({ cls: "web-desk-icon-thumb" });
-  if (card.host) {
-    const image = thumb.createEl("img", {
-      cls: "web-desk-icon-img",
-      attr: { src: faviconUrl(card.host), alt: "", draggable: "false", "aria-hidden": "true" },
-    });
-    image.addEventListener("error", () => {
-      image.remove();
-      appendLetter(thumb, card, card.size);
-    });
-  } else {
-    appendLetter(thumb, card, card.size);
-  }
+  mountSiteIcon(thumb, card, card.size, "web-desk-icon-img");
   renderCardPropertyIndicators(thumb, card.rating, card.note);
   el.createDiv({ cls: "web-desk-icon-label", text: card.title });
+}
+
+/**
+ * 站点图标先用首字母色块占位，图标就绪后再替换：
+ * 远程图标常常是 404 占位图或 16px 小图，只有解析器认可的才上画布。
+ */
+function mountSiteIcon(parent: HTMLElement, card: WebCardVisualModel, letterSize: number, imageClass: string): void {
+  const letter = appendLetter(parent, card, letterSize);
+  if (!card.host) return;
+  if (card.resolveIcon) {
+    void card.resolveIcon(card.host).then((src) => {
+      if (src && parent.isConnected) swapLetterForImage(parent, letter, src, imageClass);
+    });
+    return;
+  }
+  swapLetterForImage(parent, letter, faviconUrl(card.host), imageClass);
+}
+
+function swapLetterForImage(parent: HTMLElement, letter: HTMLElement, src: string, imageClass: string): void {
+  const image = parent.createEl("img", {
+    cls: `${imageClass} is-loading`,
+    attr: { src, alt: "", draggable: "false", "aria-hidden": "true" },
+  });
+  image.addEventListener("load", () => {
+    image.removeClass("is-loading");
+    letter.remove();
+  });
+  image.addEventListener("error", () => image.remove());
 }
 
 function renderPreviewCard(el: HTMLElement, card: WebCardVisualModel): void {
@@ -207,25 +226,16 @@ function stopCanvasGesture(element: HTMLElement): void {
 
 function appendPreviewFallback(parent: HTMLElement, card: WebCardVisualModel): void {
   const fallback = parent.createDiv({ cls: "web-desk-preview-fallback" });
-  if (card.host) {
-    const favicon = fallback.createEl("img", {
-      cls: "web-desk-preview-favicon",
-      attr: { src: faviconUrl(card.host), alt: "", draggable: "false", "aria-hidden": "true" },
-    });
-    favicon.addEventListener("error", () => {
-      favicon.remove();
-      appendLetter(fallback, card, 72);
-    });
-    return;
-  }
-  appendLetter(fallback, card, 72);
+  fallback.style.setProperty("--wd-site-color", colorFromString(card.host || card.fallbackKey));
+  mountSiteIcon(fallback, card, 72, "web-desk-preview-favicon");
 }
 
-function appendLetter(parent: HTMLElement, card: WebCardVisualModel, size: number): void {
+function appendLetter(parent: HTMLElement, card: WebCardVisualModel, size: number): HTMLElement {
   const letter = card.title.trim().charAt(0).toUpperCase() || "?";
   const block = parent.createDiv({ cls: "web-desk-icon-letter", text: letter });
   block.style.backgroundColor = colorFromString(card.host || card.fallbackKey);
   block.style.fontSize = `${Math.round(size * 0.42)}px`;
+  return block;
 }
 
 function safeRemoteImage(value: unknown): string {

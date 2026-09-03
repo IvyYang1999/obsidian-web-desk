@@ -191,6 +191,12 @@
   pointer-events: none;
 }
 
+/* 图标异步解析：先显示首字母色块，远程图标加载完成后再替换，避免闪烁和破图。 */
+.web-desk-icon-img.is-loading,
+.web-desk-preview-favicon.is-loading {
+  display: none;
+}
+
 .web-desk-file-thumb {
   color: var(--text-muted);
   background-color: var(--background-primary-alt);
@@ -1980,7 +1986,10 @@ body:has(.web-desk-drilldown) > .modal-container {
 
 .web-desk-preview-card.is-visual .web-desk-preview-media { border: 0; }
 
+/* media 是定位元素、body 是普通流，两者叠在同一格时必须显式抬高 body，否则标题被封面盖住。 */
 .web-desk-preview-card.is-visual .web-desk-preview-body {
+  position: relative;
+  z-index: 1;
   align-self: end;
   justify-content: flex-end;
   min-height: 48%;
