@@ -51,6 +51,7 @@ import {
 } from "./canvas-snap";
 import { canvasWheelIntent } from "./canvas-wheel";
 import { applyCanvasZoomBand, canvasSafeViewport, fitCanvasBounds } from "./canvas-viewport-state";
+import { clampPanToRoom, deriveRoom, minZoomForRoom, type ContentBounds, type RoomRect } from "./canvas-room";
 import { findFreePosition } from "./canvas-free-position";
 import { processFrontmatterSerially } from "./frontmatter-write";
 import {
@@ -165,6 +166,8 @@ export class WebDeskView extends ItemView {
   private readonly host: WebDeskHost;
   private rootEl!: HTMLElement;
   private canvasEl!: HTMLElement;
+  private roomEl!: HTMLElement;
+  private room: RoomRect = deriveRoom(null);
   private marqueeEl!: HTMLElement;
   private hintEl!: HTMLElement;
   private zoomLabelEl!: HTMLElement;
@@ -272,6 +275,8 @@ export class WebDeskView extends ItemView {
     // 图标可为任意（含负）坐标，由 root 的 overflow:hidden 裁剪出视口。
     // （V1 曾把 div 偏移 -BOUND 却没给图标坐标加偏移，导致所有图标渲染在屏幕外。）
     this.canvasEl = this.rootEl.createDiv({ cls: "web-desk-canvas" });
+    // 房间是画布这张“纸”本身：在最底层，随 transform 一起缩放平移。
+    this.roomEl = this.canvasEl.createDiv({ cls: "web-desk-room" });
 
     this.marqueeEl = this.rootEl.createDiv({ cls: "web-desk-marquee" });
     this.marqueeEl.style.display = "none";
@@ -482,6 +487,7 @@ export class WebDeskView extends ItemView {
     this.textBoxEls.clear();
     this.ratingEls.clear();
     this.canvasEl.empty();
+    this.roomEl = this.canvasEl.createDiv({ cls: "web-desk-room" });
     this.snapGuideLayer = createCanvasSnapGuideLayer(this.canvasEl);
 
     this.buildSvgLayer();
@@ -504,6 +510,8 @@ export class WebDeskView extends ItemView {
       );
     }
     this.syncSelection();
+
+    this.syncRoom();
 
     this.hintEl.style.display = hasCanvasContent({
       cards: this.cards.length,
@@ -658,6 +666,7 @@ export class WebDeskView extends ItemView {
   }
 
   private applyTransform(): void {
+    this.constrainTransform();
     this.canvasEl.style.transform = `translate(${this.transform.panX}px, ${this.transform.panY}px) scale(${this.transform.zoom})`;
     const grid = canvasGridBackground(this.transform.panX, this.transform.panY, this.transform.zoom);
     this.rootEl.style.backgroundSize = grid.size;
@@ -665,6 +674,44 @@ export class WebDeskView extends ItemView {
     applyCanvasZoomBand(this.rootEl, this.transform.zoom);
     this.zoomLabelEl.setText(`${Math.round(this.transform.zoom * 100)}%`);
     this.positionSelectionToolbar();
+  }
+
+  /** 内容包围盒；空画布返回 null，房间退回最小尺寸。 */
+  private contentBounds(): ContentBounds | null {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const expand = (x: number, y: number, w: number, h: number): void => {
+      minX = Math.min(minX, x); minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x + w); maxY = Math.max(maxY, y + h);
+    };
+    for (const object of this.allViewObjects()) expand(object.x, object.y, object.w, object.h);
+    for (const group of this.host.getGroups()) expand(group.x, group.y, group.w, group.h);
+    return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
+  }
+
+  /** 内容变化后重算房间：对象被拖到墙外，墙就自己长出来；拖回来又缩回去。 */
+  private syncRoom(): void {
+    this.room = deriveRoom(this.contentBounds());
+    this.roomEl.style.left = `${this.room.x}px`;
+    this.roomEl.style.top = `${this.room.y}px`;
+    this.roomEl.style.width = `${this.room.w}px`;
+    this.roomEl.style.height = `${this.room.h}px`;
+  }
+
+  /** 缩放下限跟着房间走，平移不许把墙拖进视口内侧。 */
+  private constrainTransform(): void {
+    const rect = this.rootEl.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const viewport = { width: rect.width, height: rect.height };
+    const floor = minZoomForRoom(this.room, viewport, MIN_ZOOM);
+    if (this.transform.zoom < floor) this.transform.zoom = floor;
+    const pan = clampPanToRoom(
+      { x: this.transform.panX, y: this.transform.panY },
+      this.transform.zoom,
+      this.room,
+      viewport,
+    );
+    this.transform.panX = pan.x;
+    this.transform.panY = pan.y;
   }
 
   private saveTransformDebounced(): void {
@@ -747,18 +794,12 @@ export class WebDeskView extends ItemView {
       expand(rating.x + RATING_WIDTH * scale, rating.y + RATING_HEIGHT * scale);
     }
 
-    if (minX === Infinity) {
-      this.transform = { panX: 0, panY: 0, zoom: 1 };
-      this.applyTransform();
-      this.saveTransformDebounced();
-      return;
-    }
-
+    // 适应内容 = 适应整个房间：让墙也进画面，用户才知道自己在多大的空间里。
     const rect = this.rootEl.getBoundingClientRect();
     const fitted = fitCanvasBounds(
       rect.width,
       rect.height,
-      { minX, minY, maxX, maxY },
+      { minX: this.room.x, minY: this.room.y, maxX: this.room.x + this.room.w, maxY: this.room.y + this.room.h },
       MIN_ZOOM,
       1.25,
     );

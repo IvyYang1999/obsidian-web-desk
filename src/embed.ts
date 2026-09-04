@@ -65,6 +65,7 @@ import {
 import { canvasWheelIntent } from "./canvas-wheel";
 import { CanvasFocusBoundary } from "./canvas-focus-boundary";
 import { canvasSafeViewport, fitCanvasBounds, applyCanvasZoomBand } from "./canvas-viewport-state";
+import { clampPanToRoom, deriveRoom, minZoomForRoom, type ContentBounds, type RoomRect } from "./canvas-room";
 import { processFrontmatterSerially } from "./frontmatter-write";
 import {
   GroupObjectRect,
@@ -187,6 +188,8 @@ export class DeskEmbed extends MarkdownRenderChild {
 
   private rootEl!: HTMLElement;
   private canvasEl!: HTMLElement;
+  private roomEl!: HTMLElement;
+  private room: RoomRect = deriveRoom(null);
   private hintEl!: HTMLElement;
   private zoomEl!: HTMLElement;
   private fullscreenButtonEl!: HTMLButtonElement;
@@ -278,6 +281,7 @@ export class DeskEmbed extends MarkdownRenderChild {
     this.rootEl.style.height = `${this.data.height}px`;
 
     this.canvasEl = this.rootEl.createDiv({ cls: "web-desk-canvas web-desk-embed-canvas" });
+    this.roomEl = this.canvasEl.createDiv({ cls: "web-desk-room" });
     this.marqueeEl = this.rootEl.createDiv({ cls: "web-desk-marquee" });
     this.marqueeEl.style.display = "none";
 
@@ -484,6 +488,7 @@ export class DeskEmbed extends MarkdownRenderChild {
     this.ratingEls.clear();
     this.groupEls.clear();
     this.canvasEl.empty();
+    this.roomEl = this.canvasEl.createDiv({ cls: "web-desk-room" });
     this.snapGuideLayer = createCanvasSnapGuideLayer(this.canvasEl);
 
     this.pruneDanglingArrows();
@@ -1868,7 +1873,9 @@ export class DeskEmbed extends MarkdownRenderChild {
     menu.showAtMouseEvent(event);
   }
 
+  /** 渲染后重算房间，内容长大墙就跟着长。 */
   private updateHint(): void {
+    this.syncRoom();
     this.hintEl.style.display = hasCanvasContent({
       cards: this.data.items.length,
       images: this.data.images.length,
@@ -2954,6 +2961,7 @@ export class DeskEmbed extends MarkdownRenderChild {
   // ---------- 缩放 ----------
 
   private applyTransform(): void {
+    this.constrainTransform();
     this.canvasEl.style.transform = `translate(${this.panX}px, ${this.panY}px) scale(${this.zoom})`;
     const grid = canvasGridBackground(this.panX, this.panY, this.zoom);
     this.rootEl.style.backgroundSize = grid.size;
@@ -2961,6 +2969,37 @@ export class DeskEmbed extends MarkdownRenderChild {
     applyCanvasZoomBand(this.rootEl, this.zoom);
     this.zoomEl.setText(`${Math.round(this.zoom * 100)}%`);
     this.positionSelectionToolbar();
+  }
+
+  private contentBounds(): ContentBounds | null {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const expand = (x: number, y: number, w: number, h: number): void => {
+      minX = Math.min(minX, x); minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x + w); maxY = Math.max(maxY, y + h);
+    };
+    for (const object of this.allEmbedObjects()) expand(object.x, object.y, object.w, object.h);
+    for (const group of this.data.groups) expand(group.x, group.y, group.w, group.h);
+    return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
+  }
+
+  private syncRoom(): void {
+    this.room = deriveRoom(this.contentBounds());
+    if (!this.roomEl) return;
+    this.roomEl.style.left = `${this.room.x}px`;
+    this.roomEl.style.top = `${this.room.y}px`;
+    this.roomEl.style.width = `${this.room.w}px`;
+    this.roomEl.style.height = `${this.room.h}px`;
+  }
+
+  private constrainTransform(): void {
+    const rect = this.rootEl.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const viewport = { width: rect.width, height: rect.height };
+    const floor = minZoomForRoom(this.room, viewport, MIN_ZOOM);
+    if (this.zoom < floor) this.zoom = floor;
+    const pan = clampPanToRoom({ x: this.panX, y: this.panY }, this.zoom, this.room, viewport);
+    this.panX = pan.x;
+    this.panY = pan.y;
   }
 
   private zoomAt(clientX: number, clientY: number, factor: number): void {
@@ -2981,32 +3020,13 @@ export class DeskEmbed extends MarkdownRenderChild {
   }
 
   private fitContent(): void {
-    const objects = [
-      ...this.allEmbedObjects(),
-      ...this.data.groups.map((group) => ({
-        x: group.x,
-        y: group.y,
-        w: group.w,
-        h: group.h,
-      })),
-    ];
-    if (objects.length === 0) {
-      this.panX = 0;
-      this.panY = 0;
-      this.zoom = 1;
-      this.applyTransform();
-      return;
-    }
-
-    const minX = Math.min(...objects.map((object) => object.x));
-    const minY = Math.min(...objects.map((object) => object.y));
-    const maxX = Math.max(...objects.map((object) => object.x + object.w));
-    const maxY = Math.max(...objects.map((object) => object.y + object.h));
+    // 适应内容 = 适应整个房间：让墙也进画面，用户才知道自己在多大的空间里。
+    this.syncRoom();
     const rect = this.rootEl.getBoundingClientRect();
     const fitted = fitCanvasBounds(
       rect.width,
       rect.height,
-      { minX, minY, maxX, maxY },
+      { minX: this.room.x, minY: this.room.y, maxX: this.room.x + this.room.w, maxY: this.room.y + this.room.h },
       MIN_ZOOM,
       1.25,
     );

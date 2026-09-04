@@ -45,10 +45,9 @@
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background-color: var(--background-primary);
-  background-image:
-    radial-gradient(circle, color-mix(in srgb, var(--wd-border-color) 80%, transparent) 1px, transparent 1px);
-  background-size: 24px 24px;
+  /* 视口是“桌面”，比纸略深；点阵印在纸上，所以边界一眼可见。 */
+  background-color: var(--background-secondary);
+  background-image: none;
   outline: none;
   user-select: none;
   -webkit-user-select: none;
@@ -59,6 +58,32 @@
 .web-desk-canvas {
   position: absolute;
   transform-origin: 0 0;
+}
+
+/* 有限画布的“纸”：尺寸由内容推导，随 transform 一起缩放平移。 */
+.web-desk-room {
+  position: absolute;
+  z-index: 0;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background-color: var(--background-primary);
+  background-image:
+    radial-gradient(circle, color-mix(in srgb, var(--wd-border-color) 80%, transparent) 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-position: -12px -12px;
+  box-shadow: 0 0 0 1px var(--wd-border-color), var(--wd-shadow-hover);
+  pointer-events: none;
+}
+
+/* 缩得很远时点阵会糊成一片灰，只留纸的轮廓。 */
+[data-zoom-band="far"] .web-desk-room {
+  background-image: none;
+}
+
+/* 文内画布本身已经是一个有边框的块，纸不再重复画边和影。 */
+.web-desk-embed .web-desk-room {
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--wd-border-color) 70%, transparent);
 }
 
 /* 对齐参考线属于手势反馈：即时出现、即时消失，不用 transition 追赶指针。 */
@@ -1768,8 +1793,8 @@ button.web-desk-tool-btn:focus-visible {
   overflow: hidden;
   border: 1px solid var(--wd-border-color);
   border-radius: var(--wd-radius-md);
-  background-color: var(--background-primary);
-  background-image: radial-gradient(circle, color-mix(in srgb, var(--wd-border-color) 80%, transparent) 1px, transparent 1px);
+  background-color: var(--background-secondary);
+  background-image: none;
   background-size: 24px 24px;
   user-select: none;
   -webkit-user-select: none;
