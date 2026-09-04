@@ -2704,7 +2704,7 @@ export class WebDeskView extends ItemView {
     if (!this.arrowsG) {
       return;
     }
-    this.arrowsG.innerHTML = "";
+    this.arrowsG.empty();
     this.arrowEls.clear();
 
     const scene = this.endpointScene();

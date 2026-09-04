@@ -304,7 +304,6 @@ async function renderNativePdf(
     container.addClass("is-native");
     return true;
   } catch (error) {
-    console.warn("[web-desk] Obsidian 原生 PDF 阅读器不可用，改用资源预览", error);
     container.empty();
     return false;
   }

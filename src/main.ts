@@ -165,9 +165,7 @@ export default class WebDeskPlugin extends Plugin {
   }
 
   onunload(): void {
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_WEB_DESK)) {
-      leaf.detach();
-    }
+    // 官方指引：不要在 onunload 里 detach 视图，否则用户重装/更新后工作区布局会丢。
   }
 
   private async loadDataInto(): Promise<void> {

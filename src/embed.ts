@@ -1473,7 +1473,7 @@ export class DeskEmbed extends MarkdownRenderChild {
 
   private renderArrows(): void {
     if (!this.arrowsG) return;
-    this.arrowsG.innerHTML = "";
+    this.arrowsG.empty();
     this.arrowEls.clear();
     const scene = this.endpointScene();
     for (const arrow of this.data.arrows) {

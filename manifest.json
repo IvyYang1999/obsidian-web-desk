@@ -1,9 +1,10 @@
 {
   "id": "web-desk",
-  "name": "网页桌面",
+  "name": "Web Desk 网页桌面",
   "version": "0.1.0",
   "minAppVersion": "1.5.0",
-  "description": "自由画布收藏夹：把链接丢进画布，自动转成 Markdown，像整理电脑桌面一样拖拽归类。",
+  "description": "A free-canvas bookmark desk: drop links, apps and notes onto a canvas and arrange them like a desktop. Everything stays plain Markdown.",
   "author": "yyt",
-  "isDesktopOnly": false
+  "isDesktopOnly": false,
+  "authorUrl": "https://github.com/IvyYang1999/obsidian-web-desk"
 }
