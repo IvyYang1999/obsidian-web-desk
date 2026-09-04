@@ -1,8 +1,8 @@
 /**
- * 有限画布（“房间”）：画布不再是无边虚空，而是一张会自己长大的纸。
+ * 有限画布（“房间”）：画布不再是无边虚空，但墙是看不见的。
  *
- * 房间尺寸完全由内容推导——内容包围盒外扩一圈留白即是墙，所以扩张和收缩都自动发生，
- * 用户得到的是“有边界感”而不是“要管边界”，也不需要任何持久化字段。
+ * 像 macOS 的文件夹图标视图——你看不到边界，只是滚到头就滚不动了，把图标往边缘拖，
+ * 空间自己延展。房间尺寸完全由内容推导，扩张和收缩都自动发生，没有任何持久化字段。
  */
 
 export interface RoomRect {
@@ -57,10 +57,8 @@ export function deriveRoom(bounds: ContentBounds | null, padding = ROOM_PADDING)
   return { x: horizontal.start, y: vertical.start, w: horizontal.size, h: vertical.size };
 }
 
-/** 越过墙还能再推一点点，滚动到头有“顶住”的手感而不是硬停。 */
-export function roomSlack(viewport: Viewport): number {
-  return Math.min(72, Math.max(24, Math.min(viewport.width, viewport.height) * 0.08));
-}
+/** 手势中最多能把墙拉过头多少屏幕像素；松手后回弹。 */
+export const MAX_OVERSCROLL = 96;
 
 function clampAxis(
   pan: number,
@@ -68,26 +66,25 @@ function clampAxis(
   roomSize: number,
   zoom: number,
   viewportSize: number,
-  slack: number,
 ): number {
   const screenStart = pan + roomStart * zoom;
   const screenSize = roomSize * zoom;
   let min: number;
   let max: number;
   if (screenSize >= viewportSize) {
-    // 房间比视口大：墙不能被拖进视口内侧，否则会看到纸外的空白。
-    min = viewportSize - screenSize - slack;
-    max = slack;
+    // 房间比视口大：墙贴到视口边缘就是尽头，再滚也不动。
+    min = viewportSize - screenSize;
+    max = 0;
   } else {
-    // 房间比视口小：整张纸留在视口里，允许在其中自由摆放。
-    min = -slack;
-    max = viewportSize - screenSize + slack;
+    // 房间比视口小：整个房间留在视口内。
+    min = 0;
+    max = viewportSize - screenSize;
   }
   const clamped = Math.min(max, Math.max(min, screenStart));
   return pan + (clamped - screenStart);
 }
 
-/** 把平移量约束在房间可见范围内；缩放、拖拽平移、滚轮平移之后都要过这一道。 */
+/** 硬边界：手势结束、缩放、适应内容之后都归到这里。 */
 export function clampPanToRoom(
   pan: { x: number; y: number },
   zoom: number,
@@ -95,10 +92,35 @@ export function clampPanToRoom(
   viewport: Viewport,
 ): { x: number; y: number } {
   if (viewport.width <= 0 || viewport.height <= 0) return pan;
-  const slack = roomSlack(viewport);
   return {
-    x: clampAxis(pan.x, room.x, room.w, zoom, viewport.width, slack),
-    y: clampAxis(pan.y, room.y, room.h, zoom, viewport.height, slack),
+    x: clampAxis(pan.x, room.x, room.w, zoom, viewport.width),
+    y: clampAxis(pan.y, room.y, room.h, zoom, viewport.height),
+  };
+}
+
+/**
+ * 超出边界的部分随距离渐近饱和，越拉越沉，永远拉不过 MAX_OVERSCROLL。
+ * 这是 macOS 橡皮筋的手感：能拉一点，但拉不走。
+ */
+function dampen(overshoot: number, max: number): number {
+  if (overshoot === 0) return 0;
+  const magnitude = Math.abs(overshoot);
+  return Math.sign(overshoot) * max * (1 - 1 / (1 + magnitude / max));
+}
+
+/** 手势进行中的位置：允许拉过墙，但有阻尼。松手后调用 clampPanToRoom 回弹。 */
+export function elasticPanToRoom(
+  pan: { x: number; y: number },
+  zoom: number,
+  room: RoomRect,
+  viewport: Viewport,
+  max = MAX_OVERSCROLL,
+): { x: number; y: number } {
+  if (viewport.width <= 0 || viewport.height <= 0) return pan;
+  const hard = clampPanToRoom(pan, zoom, room, viewport);
+  return {
+    x: hard.x + dampen(pan.x - hard.x, max),
+    y: hard.y + dampen(pan.y - hard.y, max),
   };
 }
 

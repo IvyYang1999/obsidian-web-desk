@@ -65,7 +65,7 @@ import {
 import { canvasWheelIntent } from "./canvas-wheel";
 import { CanvasFocusBoundary } from "./canvas-focus-boundary";
 import { canvasSafeViewport, fitCanvasBounds, applyCanvasZoomBand } from "./canvas-viewport-state";
-import { clampPanToRoom, deriveRoom, minZoomForRoom, type ContentBounds, type RoomRect } from "./canvas-room";
+import { clampPanToRoom, deriveRoom, elasticPanToRoom, minZoomForRoom, type ContentBounds, type RoomRect } from "./canvas-room";
 import { processFrontmatterSerially } from "./frontmatter-write";
 import {
   GroupObjectRect,
@@ -188,8 +188,9 @@ export class DeskEmbed extends MarkdownRenderChild {
 
   private rootEl!: HTMLElement;
   private canvasEl!: HTMLElement;
-  private roomEl!: HTMLElement;
   private room: RoomRect = deriveRoom(null);
+  private settleFrame: number | null = null;
+  private settleTimer: number | null = null;
   private hintEl!: HTMLElement;
   private zoomEl!: HTMLElement;
   private fullscreenButtonEl!: HTMLButtonElement;
@@ -281,7 +282,6 @@ export class DeskEmbed extends MarkdownRenderChild {
     this.rootEl.style.height = `${this.data.height}px`;
 
     this.canvasEl = this.rootEl.createDiv({ cls: "web-desk-canvas web-desk-embed-canvas" });
-    this.roomEl = this.canvasEl.createDiv({ cls: "web-desk-room" });
     this.marqueeEl = this.rootEl.createDiv({ cls: "web-desk-marquee" });
     this.marqueeEl.style.display = "none";
 
@@ -488,7 +488,6 @@ export class DeskEmbed extends MarkdownRenderChild {
     this.ratingEls.clear();
     this.groupEls.clear();
     this.canvasEl.empty();
-    this.roomEl = this.canvasEl.createDiv({ cls: "web-desk-room" });
     this.snapGuideLayer = createCanvasSnapGuideLayer(this.canvasEl);
 
     this.pruneDanglingArrows();
@@ -1910,7 +1909,8 @@ export class DeskEmbed extends MarkdownRenderChild {
       }
       this.panX += intent.x;
       this.panY += intent.y;
-      this.applyTransform();
+      this.applyTransform(true);
+      this.scheduleSettle();
     }, { passive: false });
 
     this.rootEl.addEventListener("keydown", (event) => {
@@ -2024,11 +2024,12 @@ export class DeskEmbed extends MarkdownRenderChild {
         moved = true;
         this.panX = baseX + dx;
         this.panY = baseY + dy;
-        this.applyTransform();
+        this.applyTransform(true);
       };
       const onUp = (): void => {
         this.rootEl.removeEventListener("pointermove", onMove);
         this.rootEl.removeEventListener("pointerup", onUp);
+        if (moved) this.settlePan();
         if (!moved) {
           this.selectedObjects.clear();
           this.selectedGroupId = null;
@@ -2960,8 +2961,8 @@ export class DeskEmbed extends MarkdownRenderChild {
 
   // ---------- 缩放 ----------
 
-  private applyTransform(): void {
-    this.constrainTransform();
+  private applyTransform(elastic = false): void {
+    this.constrainTransform(elastic);
     this.canvasEl.style.transform = `translate(${this.panX}px, ${this.panY}px) scale(${this.zoom})`;
     const grid = canvasGridBackground(this.panX, this.panY, this.zoom);
     this.rootEl.style.backgroundSize = grid.size;
@@ -2984,22 +2985,55 @@ export class DeskEmbed extends MarkdownRenderChild {
 
   private syncRoom(): void {
     this.room = deriveRoom(this.contentBounds());
-    if (!this.roomEl) return;
-    this.roomEl.style.left = `${this.room.x}px`;
-    this.roomEl.style.top = `${this.room.y}px`;
-    this.roomEl.style.width = `${this.room.w}px`;
-    this.roomEl.style.height = `${this.room.h}px`;
   }
 
-  private constrainTransform(): void {
+  private constrainTransform(elastic = false): void {
     const rect = this.rootEl.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
     const viewport = { width: rect.width, height: rect.height };
     const floor = minZoomForRoom(this.room, viewport, MIN_ZOOM);
     if (this.zoom < floor) this.zoom = floor;
-    const pan = clampPanToRoom({ x: this.panX, y: this.panY }, this.zoom, this.room, viewport);
+    const place = elastic ? elasticPanToRoom : clampPanToRoom;
+    const pan = place({ x: this.panX, y: this.panY }, this.zoom, this.room, viewport);
     this.panX = pan.x;
     this.panY = pan.y;
+  }
+
+  /** 手势结束后把拉过墙的部分弹回去。 */
+  private settlePan(): void {
+    if (this.settleFrame !== null) cancelAnimationFrame(this.settleFrame);
+    const rect = this.rootEl.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const viewport = { width: rect.width, height: rect.height };
+    const target = clampPanToRoom({ x: this.panX, y: this.panY }, this.zoom, this.room, viewport);
+    const fromX = this.panX;
+    const fromY = this.panY;
+    if (Math.abs(target.x - fromX) < 0.5 && Math.abs(target.y - fromY) < 0.5) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      this.panX = target.x;
+      this.panY = target.y;
+      this.applyTransform();
+      return;
+    }
+    const start = performance.now();
+    const step = (now: number): void => {
+      const t = Math.min(1, (now - start) / 220);
+      const ease = 1 - Math.pow(1 - t, 3);
+      this.panX = fromX + (target.x - fromX) * ease;
+      this.panY = fromY + (target.y - fromY) * ease;
+      this.applyTransform();
+      if (t < 1) this.settleFrame = requestAnimationFrame(step);
+      else this.settleFrame = null;
+    };
+    this.settleFrame = requestAnimationFrame(step);
+  }
+
+  private scheduleSettle(): void {
+    if (this.settleTimer !== null) window.clearTimeout(this.settleTimer);
+    this.settleTimer = window.setTimeout(() => {
+      this.settleTimer = null;
+      this.settlePan();
+    }, 140);
   }
 
   private zoomAt(clientX: number, clientY: number, factor: number): void {

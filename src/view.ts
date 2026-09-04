@@ -51,7 +51,7 @@ import {
 } from "./canvas-snap";
 import { canvasWheelIntent } from "./canvas-wheel";
 import { applyCanvasZoomBand, canvasSafeViewport, fitCanvasBounds } from "./canvas-viewport-state";
-import { clampPanToRoom, deriveRoom, minZoomForRoom, type ContentBounds, type RoomRect } from "./canvas-room";
+import { clampPanToRoom, deriveRoom, elasticPanToRoom, minZoomForRoom, type ContentBounds, type RoomRect } from "./canvas-room";
 import { findFreePosition } from "./canvas-free-position";
 import { processFrontmatterSerially } from "./frontmatter-write";
 import {
@@ -166,8 +166,9 @@ export class WebDeskView extends ItemView {
   private readonly host: WebDeskHost;
   private rootEl!: HTMLElement;
   private canvasEl!: HTMLElement;
-  private roomEl!: HTMLElement;
   private room: RoomRect = deriveRoom(null);
+  private settleFrame: number | null = null;
+  private settleTimer: number | null = null;
   private marqueeEl!: HTMLElement;
   private hintEl!: HTMLElement;
   private zoomLabelEl!: HTMLElement;
@@ -275,8 +276,6 @@ export class WebDeskView extends ItemView {
     // 图标可为任意（含负）坐标，由 root 的 overflow:hidden 裁剪出视口。
     // （V1 曾把 div 偏移 -BOUND 却没给图标坐标加偏移，导致所有图标渲染在屏幕外。）
     this.canvasEl = this.rootEl.createDiv({ cls: "web-desk-canvas" });
-    // 房间是画布这张“纸”本身：在最底层，随 transform 一起缩放平移。
-    this.roomEl = this.canvasEl.createDiv({ cls: "web-desk-room" });
 
     this.marqueeEl = this.rootEl.createDiv({ cls: "web-desk-marquee" });
     this.marqueeEl.style.display = "none";
@@ -487,7 +486,6 @@ export class WebDeskView extends ItemView {
     this.textBoxEls.clear();
     this.ratingEls.clear();
     this.canvasEl.empty();
-    this.roomEl = this.canvasEl.createDiv({ cls: "web-desk-room" });
     this.snapGuideLayer = createCanvasSnapGuideLayer(this.canvasEl);
 
     this.buildSvgLayer();
@@ -665,8 +663,8 @@ export class WebDeskView extends ItemView {
     };
   }
 
-  private applyTransform(): void {
-    this.constrainTransform();
+  private applyTransform(elastic = false): void {
+    this.constrainTransform(elastic);
     this.canvasEl.style.transform = `translate(${this.transform.panX}px, ${this.transform.panY}px) scale(${this.transform.zoom})`;
     const grid = canvasGridBackground(this.transform.panX, this.transform.panY, this.transform.zoom);
     this.rootEl.style.backgroundSize = grid.size;
@@ -688,23 +686,23 @@ export class WebDeskView extends ItemView {
     return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
   }
 
-  /** 内容变化后重算房间：对象被拖到墙外，墙就自己长出来；拖回来又缩回去。 */
+  /** 内容变化后重算房间：对象被拖到墙外，墙就自己长出来；拖回来又缩回去。墙本身不可见。 */
   private syncRoom(): void {
     this.room = deriveRoom(this.contentBounds());
-    this.roomEl.style.left = `${this.room.x}px`;
-    this.roomEl.style.top = `${this.room.y}px`;
-    this.roomEl.style.width = `${this.room.w}px`;
-    this.roomEl.style.height = `${this.room.h}px`;
   }
 
-  /** 缩放下限跟着房间走，平移不许把墙拖进视口内侧。 */
-  private constrainTransform(): void {
+  /**
+   * 缩放下限跟着房间走；平移在手势中允许橡皮筋式拉过墙，手势结束再回弹。
+   * 墙没有视觉，用户只通过“滚不动、缩不动”感知它。
+   */
+  private constrainTransform(elastic = false): void {
     const rect = this.rootEl.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
     const viewport = { width: rect.width, height: rect.height };
     const floor = minZoomForRoom(this.room, viewport, MIN_ZOOM);
     if (this.transform.zoom < floor) this.transform.zoom = floor;
-    const pan = clampPanToRoom(
+    const place = elastic ? elasticPanToRoom : clampPanToRoom;
+    const pan = place(
       { x: this.transform.panX, y: this.transform.panY },
       this.transform.zoom,
       this.room,
@@ -712,6 +710,50 @@ export class WebDeskView extends ItemView {
     );
     this.transform.panX = pan.x;
     this.transform.panY = pan.y;
+  }
+
+  /** 手势结束后把拉过墙的部分弹回去。 */
+  private settlePan(): void {
+    if (this.settleFrame !== null) cancelAnimationFrame(this.settleFrame);
+    const rect = this.rootEl.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const viewport = { width: rect.width, height: rect.height };
+    const target = clampPanToRoom(
+      { x: this.transform.panX, y: this.transform.panY },
+      this.transform.zoom,
+      this.room,
+      viewport,
+    );
+    const fromX = this.transform.panX;
+    const fromY = this.transform.panY;
+    if (Math.abs(target.x - fromX) < 0.5 && Math.abs(target.y - fromY) < 0.5) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      this.transform.panX = target.x;
+      this.transform.panY = target.y;
+      this.applyTransform();
+      this.saveTransformDebounced();
+      return;
+    }
+    const start = performance.now();
+    const step = (now: number): void => {
+      const t = Math.min(1, (now - start) / 220);
+      const ease = 1 - Math.pow(1 - t, 3);
+      this.transform.panX = fromX + (target.x - fromX) * ease;
+      this.transform.panY = fromY + (target.y - fromY) * ease;
+      this.applyTransform();
+      if (t < 1) this.settleFrame = requestAnimationFrame(step);
+      else { this.settleFrame = null; this.saveTransformDebounced(); }
+    };
+    this.settleFrame = requestAnimationFrame(step);
+  }
+
+  /** 滚轮没有“松手”事件，用停止滚动来判定手势结束。 */
+  private scheduleSettle(): void {
+    if (this.settleTimer !== null) window.clearTimeout(this.settleTimer);
+    this.settleTimer = window.setTimeout(() => {
+      this.settleTimer = null;
+      this.settlePan();
+    }, 140);
   }
 
   private saveTransformDebounced(): void {
@@ -735,8 +777,8 @@ export class WebDeskView extends ItemView {
 
     this.transform.panX += intent.x;
     this.transform.panY += intent.y;
-    this.applyTransform();
-    this.saveTransformDebounced();
+    this.applyTransform(true);
+    this.scheduleSettle();
   }
 
   private zoomAt(clientX: number, clientY: number, factor: number): void {
@@ -914,13 +956,14 @@ export class WebDeskView extends ItemView {
       if (moveEvent.pointerId !== event.pointerId) return;
       this.transform.panX = baseX + moveEvent.clientX - startX;
       this.transform.panY = baseY + moveEvent.clientY - startY;
-      this.applyTransform();
+      this.applyTransform(true);
     };
     const onUp = (upEvent: PointerEvent): void => {
       if (upEvent.pointerId !== event.pointerId) return;
       document.removeEventListener("pointermove", onMove, true);
       document.removeEventListener("pointerup", onUp, true);
       document.removeEventListener("pointercancel", onUp, true);
+      this.settlePan();
       this.saveTransformDebounced();
     };
     document.addEventListener("pointermove", onMove, true);

@@ -5,7 +5,7 @@ const { buildSync } = require("esbuild");
 const built = buildSync({ entryPoints: ["src/canvas-room.ts"], bundle: true, format: "cjs", platform: "node", write: false });
 const mod = { exports: {} };
 new Function("module", "exports", "require", built.outputFiles[0].text)(mod, mod.exports, require);
-const { deriveRoom, clampPanToRoom, minZoomForRoom, roomSlack, ROOM_MIN_WIDTH, ROOM_MIN_HEIGHT } = mod.exports;
+const { deriveRoom, clampPanToRoom, elasticPanToRoom, minZoomForRoom, MAX_OVERSCROLL, ROOM_MIN_WIDTH, ROOM_MIN_HEIGHT } = mod.exports;
 
 const VIEW = { width: 1200, height: 800 };
 
@@ -37,25 +37,39 @@ test("房间对齐 24px 网格，墙落在点阵线上", () => {
   for (const v of [room.x, room.y, room.w, room.h]) assert.ok(v % 24 === 0, `${v} 未对齐网格`);
 });
 
-test("房间比视口大时，墙不能被拖进视口内侧", () => {
+test("房间比视口大时，墙贴到视口边缘就是尽头", () => {
   const room = deriveRoom({ minX: 0, minY: 0, maxX: 4000, maxY: 3000 });
-  const slack = roomSlack(VIEW);
-  // 想把左墙拖到视口中间
+  // 想把左墙拖到视口中间，只能停在视口左缘
   const p = clampPanToRoom({ x: 600 - room.x, y: 0 }, 1, room, VIEW);
-  assert.ok(p.x + room.x <= slack + 0.001, `左墙应被顶回视口左缘附近，实际 ${p.x + room.x}`);
-  // 想把右墙拖到视口中间
+  assert.equal(Math.round(p.x + room.x), 0, "左墙贴视口左缘");
+  // 想把右墙拖到视口中间，只能停在视口右缘
   const q = clampPanToRoom({ x: -(room.x + room.w) + 600, y: 0 }, 1, room, VIEW);
-  assert.ok(q.x + (room.x + room.w) >= VIEW.width - slack - 0.001, "右墙应被顶回视口右缘附近");
+  assert.equal(Math.round(q.x + (room.x + room.w)), VIEW.width, "右墙贴视口右缘");
 });
 
-test("房间比视口小时整张纸留在视口里，不会被推出屏幕", () => {
+test("房间比视口小时整个房间留在视口里，不会被推出屏幕", () => {
   const room = deriveRoom(null);
   const p = clampPanToRoom({ x: 99999, y: -99999 }, 0.3, room, VIEW);
   const left = p.x + room.x * 0.3;
   const top = p.y + room.y * 0.3;
-  const slack = roomSlack(VIEW);
-  assert.ok(left >= -slack - 0.001 && left <= VIEW.width - room.w * 0.3 + slack + 0.001, `left ${left}`);
-  assert.ok(top >= -slack - 0.001 && top <= VIEW.height - room.h * 0.3 + slack + 0.001, `top ${top}`);
+  assert.ok(left >= -0.001 && left <= VIEW.width - room.w * 0.3 + 0.001, `left ${left}`);
+  assert.ok(top >= -0.001 && top <= VIEW.height - room.h * 0.3 + 0.001, `top ${top}`);
+});
+
+test("橡皮筋：能拉过墙一点，但越拉越沉且永远拉不过上限", () => {
+  const room = deriveRoom({ minX: 0, minY: 0, maxX: 4000, maxY: 3000 });
+  const hard = clampPanToRoom({ x: 1e6, y: 0 }, 1, room, VIEW);
+  const small = elasticPanToRoom({ x: hard.x + 40, y: 0 }, 1, room, VIEW);
+  const large = elasticPanToRoom({ x: hard.x + 4000, y: 0 }, 1, room, VIEW);
+  assert.ok(small.x - hard.x > 0 && small.x - hard.x < 40, "小幅超出被压缩但仍跟手");
+  assert.ok(large.x - hard.x < MAX_OVERSCROLL, `再怎么拉也不过上限: ${large.x - hard.x}`);
+  assert.ok(large.x - hard.x > small.x - hard.x, "拉得多确实走得多，只是越来越沉");
+});
+
+test("边界内的手势位置不受橡皮筋影响", () => {
+  const room = deriveRoom({ minX: 0, minY: 0, maxX: 4000, maxY: 3000 });
+  const pan = { x: -500, y: -400 };
+  assert.deepEqual(elasticPanToRoom(pan, 1, room, VIEW), pan);
 });
 
 test("范围内的平移原样保留，正常拖动不被干扰", () => {
