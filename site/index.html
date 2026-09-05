@@ -388,6 +388,7 @@ footer a{color:var(--ink-2);border-bottom:1px solid var(--line)}
       el.innerHTML = [1, 2, 3, 4, 5].map((n) => `<span class="${n <= r.v ? "on" : ""}" data-v="${n}">★</span>`).join(""); layer.appendChild(el); els.set(r.id, el);
     }
     renderToolbar();
+    syncRoom();
   }
   const ICON = {
     open: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M10 14 21 3M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg>',
@@ -431,12 +432,95 @@ footer a{color:var(--ink-2);border-bottom:1px solid var(--line)}
 
   // ---------- 变换 ----------
   const band = (z) => z < 0.45 ? "far" : z < 0.75 ? "mid" : "near";
-  function apply() {
+  // ---------- 有限画布：墙看不见，只在撞到时才存在 ----------
+  const GRID = 24, PAD = 120, MIN_W = 54 * GRID, MIN_H = 32 * GRID, OVERSCROLL = 96;
+  let room = { x: -MIN_W / 2, y: -MIN_H / 2, w: MIN_W, h: MIN_H };
+  const alignGrow = (from, to, min) => {
+    const start = Math.floor(from / GRID) * GRID;
+    const size = Math.ceil(to / GRID) * GRID - start;
+    if (size >= min) return { start, size };
+    const extra = Math.ceil((min - size) / 2 / GRID) * GRID;
+    return { start: start - extra, size: size + extra * 2 };
+  };
+  /** 房间由内容推导：拖出墙外墙就长大，拖回来又缩回去，全程不用管边界。 */
+  function syncRoom() {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const ex = (x, y, w, h) => { minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x + w); maxY = Math.max(maxY, y + h); };
+    for (const a of state.areas) ex(a.x, a.y, a.w, a.h);
+    for (const o of all()) { const f = frame(o); ex(o.x, o.y, f.w, f.h); }
+    if (!Number.isFinite(minX)) { room = { x: -MIN_W / 2, y: -MIN_H / 2, w: MIN_W, h: MIN_H }; return; }
+    const h = alignGrow(minX - PAD, maxX + PAD, MIN_W), v = alignGrow(minY - PAD, maxY + PAD, MIN_H);
+    room = { x: h.start, y: v.start, w: h.size, h: v.size };
+  }
+  function clampAxis(pan, start, size, z, vp) {
+    const screenStart = pan + start * z, screen = size * z;
+    const bounds = screen >= vp ? [vp - screen, 0] : [0, vp - screen];
+    return pan + (Math.min(bounds[1], Math.max(bounds[0], screenStart)) - screenStart);
+  }
+  const hardPan = (pan, z, r) => ({ x: clampAxis(pan.x, room.x, room.w, z, r.width), y: clampAxis(pan.y, room.y, room.h, z, r.height) });
+  /** 越拉越沉，永远拉不过 OVERSCROLL，就是 macOS 橡皮筋的手感。 */
+  const dampen = (d) => d === 0 ? 0 : Math.sign(d) * OVERSCROLL * (1 - 1 / (1 + Math.abs(d) / OVERSCROLL));
+  function apply(elastic) {
+    const r = canvas.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) {
+      const floor = Math.max(0.25, Math.min(1, Math.min(r.width / room.w, r.height / room.h) * 0.75));
+      if (state.view.z < floor) state.view.z = floor;
+      const hard = hardPan(state.view, state.view.z, r);
+      state.view.x = elastic ? hard.x + dampen(state.view.x - hard.x) : hard.x;
+      state.view.y = elastic ? hard.y + dampen(state.view.y - hard.y) : hard.y;
+    }
     const { x, y, z } = state.view;
     layer.style.transform = `translate(${x}px,${y}px) scale(${z})`;
     canvas.style.backgroundSize = `${24 * z}px ${24 * z}px`; canvas.style.backgroundPosition = `${x}px ${y}px`;
     pct.textContent = Math.round(z * 100) + "%"; canvas.dataset.band = band(z); layer.style.setProperty("--z", z);
     positionToolbar();
+  }
+  let settleFrame = null, settleTimer = 0;
+  /** 手势结束后把拉过墙的部分弹回去。 */
+  function settle() {
+    if (settleFrame) cancelAnimationFrame(settleFrame);
+    const r = canvas.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const target = hardPan(state.view, state.view.z, r);
+    const fx = state.view.x, fy = state.view.y;
+    if (Math.abs(target.x - fx) < 0.5 && Math.abs(target.y - fy) < 0.5) return;
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) { state.view.x = target.x; state.view.y = target.y; apply(); return; }
+    const t0 = performance.now();
+    const stepBack = (now) => {
+      const t = Math.min(1, (now - t0) / 220), e = 1 - Math.pow(1 - t, 3);
+      state.view.x = fx + (target.x - fx) * e; state.view.y = fy + (target.y - fy) * e;
+      apply();
+      settleFrame = t < 1 ? requestAnimationFrame(stepBack) : null;
+    };
+    settleFrame = requestAnimationFrame(stepBack);
+  }
+  const scheduleSettle = () => { clearTimeout(settleTimer); settleTimer = setTimeout(settle, 140); };
+
+  // 拖到视口边缘，画布朝那个方向自己滚，墙跟着长——扩展空间不需要任何显式操作。
+  const EDGE_BAND = 64, EDGE_SPEED = 1100;
+  function edgeVelocity(c, r) {
+    if (r.width <= EDGE_BAND * 2 || r.height <= EDGE_BAND * 2) return { x: 0, y: 0 };
+    const axis = (pos, start, size) => {
+      const a = pos - start, b = start + size - pos;
+      if (a < EDGE_BAND) { const i = Math.min(1, Math.max(0, (EDGE_BAND - a) / EDGE_BAND)); return EDGE_SPEED * i * i; }
+      if (b < EDGE_BAND) { const i = Math.min(1, Math.max(0, (EDGE_BAND - b) / EDGE_BAND)); return -EDGE_SPEED * i * i; }
+      return 0;
+    };
+    return { x: axis(c.x, r.left, r.width), y: axis(c.y, r.top, r.height) };
+  }
+  function makeEdgePan(replay) {
+    let frame = null, pointer = null, at = 0;
+    const tick = (now) => {
+      if (!pointer) { frame = null; return; }
+      const dt = Math.min(0.05, Math.max(0, (now - at) / 1000)); at = now;
+      const v = edgeVelocity(pointer, canvas.getBoundingClientRect());
+      if (v.x || v.y) { state.view.x += v.x * dt; state.view.y += v.y * dt; replay(); syncRoom(); apply(); }
+      frame = requestAnimationFrame(tick);
+    };
+    return {
+      update(c) { pointer = c; if (frame === null) { at = performance.now(); frame = requestAnimationFrame(tick); } },
+      stop() { if (frame) cancelAnimationFrame(frame); frame = null; pointer = null; },
+    };
   }
   const toCanvas = (cx, cy) => { const r = canvas.getBoundingClientRect(); return { x: (cx - r.left - state.view.x) / state.view.z, y: (cy - r.top - state.view.y) / state.view.z }; };
   function zoomAt(cx, cy, f) {
@@ -444,18 +528,15 @@ footer a{color:var(--ink-2);border-bottom:1px solid var(--line)}
     state.view.x = px - (px - state.view.x) * k; state.view.y = py - (py - state.view.y) * k; state.view.z = nz; apply();
   }
   function fit() {
-    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
-    const ex = (x, y, w, h) => { minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x + w); maxY = Math.max(maxY, y + h); };
-    for (const a of state.areas) ex(a.x, a.y, a.w, a.h);
-    for (const o of all()) { const f = frame(o); ex(o.x, o.y, f.w, f.h); }
-    const r = canvas.getBoundingClientRect(), W = r.width - 48, H = r.height - 110, cw = maxX - minX, ch = maxY - minY;
-    const z = Math.min(1.25, Math.max(0.25, Math.min(W / cw, H / ch)));
-    state.view = { z, x: 24 + (W - cw * z) / 2 - minX * z, y: 48 + (H - ch * z) / 2 - minY * z }; apply();
+    syncRoom();
+    const r = canvas.getBoundingClientRect(), W = r.width - 48, H = r.height - 110;
+    const z = Math.min(1.25, Math.max(0.25, Math.min(W / room.w, H / room.h)));
+    state.view = { z, x: 24 + (W - room.w * z) / 2 - room.x * z, y: 48 + (H - room.h * z) / 2 - room.y * z }; apply();
   }
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
     if (e.ctrlKey || e.metaKey) { zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.01)); return; }
-    state.view.x -= e.deltaX; state.view.y -= e.deltaY; apply();
+    state.view.x -= e.deltaX; state.view.y -= e.deltaY; apply(true); scheduleSettle();
   }, { passive: false });
   document.querySelectorAll("[data-zoom]").forEach((b) => b.addEventListener("click", () => { const r = canvas.getBoundingClientRect(); const k = b.dataset.zoom; if (k === "fit") fit(); else zoomAt(r.left + r.width / 2, r.top + r.height / 2, k === "in" ? 1.2 : 1 / 1.2); }));
 
@@ -477,8 +558,8 @@ footer a{color:var(--ink-2);border-bottom:1px solid var(--line)}
   function beginPan(e) {
     const sx = e.clientX, sy = e.clientY, bx = state.view.x, by = state.view.y; let moved = false;
     canvas.setPointerCapture(e.pointerId);
-    const mv = (ev) => { const dx = ev.clientX - sx, dy = ev.clientY - sy; if (!moved && Math.hypot(dx, dy) < 4) return; moved = true; state.view.x = bx + dx; state.view.y = by + dy; apply(); };
-    const up = () => { canvas.removeEventListener("pointermove", mv); canvas.removeEventListener("pointerup", up); if (!moved && state.sel) { state.sel = null; render(); } };
+    const mv = (ev) => { const dx = ev.clientX - sx, dy = ev.clientY - sy; if (!moved && Math.hypot(dx, dy) < 4) return; moved = true; state.view.x = bx + dx; state.view.y = by + dy; apply(true); };
+    const up = () => { canvas.removeEventListener("pointermove", mv); canvas.removeEventListener("pointerup", up); if (moved) settle(); if (!moved && state.sel) { state.sel = null; render(); } };
     canvas.addEventListener("pointermove", mv); canvas.addEventListener("pointerup", up);
   }
   function beginDrag(e, obj, isArea) {
@@ -486,7 +567,11 @@ footer a{color:var(--ink-2);border-bottom:1px solid var(--line)}
     const members = isArea ? all().filter((o) => { const f = frame(o); return areaAt(o.x + f.w / 2, o.y + f.h / 2)?.id === obj.id; }).map((o) => ({ o, x: o.x, y: o.y })) : [];
     let moved = false; canvas.setPointerCapture(e.pointerId);
     const el = els.get(obj.id);
+    let last = { x: e.clientX, y: e.clientY };
+    // toCanvas 每次都用当前平移量换算，所以画布自己滚动时对象天然跟着指针。
+    const edge = makeEdgePan(() => mv({ clientX: last.x, clientY: last.y }));
     const mv = (ev) => {
+      last = { x: ev.clientX, y: ev.clientY };
       const p = toCanvas(ev.clientX, ev.clientY); let dx = p.x - start.x, dy = p.y - start.y;
       if (!moved && Math.hypot(dx, dy) * state.view.z < 4) return; moved = true;
       let nx = ox + dx, ny = oy + dy;
@@ -501,8 +586,10 @@ footer a{color:var(--ink-2);border-bottom:1px solid var(--line)}
       if (isArea) { for (const m of members) { m.o.x = m.x + (nx - ox); m.o.y = m.y + (ny - oy); const me = els.get(m.o.id); me.style.left = m.o.x + "px"; me.style.top = m.o.y + "px"; } }
       else { const hit = areaAt(nx + f.w / 2, ny + f.h / 2); for (const a of state.areas) els.get(a.id).classList.toggle("drop", hit?.id === a.id); }
       positionToolbar();
+      edge.update(last);
     };
     const up = () => {
+      edge.stop();
       canvas.removeEventListener("pointermove", mv); canvas.removeEventListener("pointerup", up);
       gv.style.display = gh.style.display = "none";
       if (moved) { obj.x = Math.round(obj.x); obj.y = Math.round(obj.y); if (!isArea) { const f = frame(obj); const hit = areaAt(obj.x + f.w / 2, obj.y + f.h / 2); if (hit) say(`已归入区域「${hit.name}」（真实插件会写进 frontmatter）`); } render(); }
