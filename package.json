@@ -1,7 +1,7 @@
 {
-  "name": "obsidian-web-desk",
-  "version": "0.1.0",
-  "description": "Obsidian plugin: a free-canvas bookmark desk. Drop URLs, get markdown notes and draggable icons.",
+  "name": "obsidian-naviboard",
+  "version": "0.2.0",
+  "description": "NaviBoard for Obsidian: gather webpages, files, apps, and notes on a free canvas.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",

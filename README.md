@@ -1,6 +1,6 @@
-# Web Desk 网页桌面
+# NaviBoard
 
-An Obsidian plugin that turns your bookmarks into a desktop. Drop a link, an
+An Obsidian plugin that turns your bookmarks into a visual navigation board. Drop a link, an
 app or a note onto a free canvas and arrange it the way you arrange icons on
 your computer. Every item is a plain Markdown file; positions live in
 frontmatter, so the canvas syncs with your vault and nothing is locked in a
@@ -38,16 +38,16 @@ Not yet listed. Until it is, use one of the options below.
 1. Install [BRAT](https://github.com/TfTHacker/obsidian42-brat) from the
    community plugin list.
 2. Run **BRAT: Add a beta plugin for testing** and paste
-   `IvyYang1999/obsidian-web-desk`.
-3. Enable **Web Desk 网页桌面** in Settings → Community plugins.
+   `IvyYang1999/obsidian-naviboard`.
+3. Enable **NaviBoard** in Settings → Community plugins.
 
 BRAT keeps the plugin updated automatically.
 
 ### Manually
 
 Download `main.js`, `manifest.json` and `styles.css` from the
-[latest release](https://github.com/IvyYang1999/obsidian-web-desk/releases/latest),
-put them in `<vault>/.obsidian/plugins/web-desk/`, then enable the plugin.
+[latest release](https://github.com/IvyYang1999/obsidian-naviboard/releases/latest),
+put them in `<vault>/.obsidian/plugins/naviboard/`, then enable the plugin.
 
 ## Usage
 
@@ -66,6 +66,25 @@ Open the canvas from the ribbon (grid icon) or the command palette
 Bookmarks are stored in the folder set in plugin settings (default `收藏夹`).
 Local app icons are cached under the attachment folder.
 
+## Privacy and permissions
+
+NaviBoard is a desktop-only plugin. It does not collect analytics, require an
+account, or send your vault contents to a NaviBoard server.
+
+- **Network access happens only for features you invoke.** Importing a URL may
+  request the source page, Open Graph images, favicon services, and—for X posts—
+  the public FxTwitter API. Embedded web views load the destination website
+  directly.
+- **Local file access is explicit.** When you drop an app, folder, or file from
+  Finder, NaviBoard stores its path in Markdown so it can open or reveal that
+  item when you ask. It may read a local app icon for display.
+- **Clipii is optional.** If Clipii is installed at its standard Homebrew path,
+  NaviBoard can invoke it to convert supported WeChat and Xiaohongshu pages.
+  Temporary conversion files are cleaned up after import.
+
+Your imported notes and canvas data remain ordinary files in your vault. The
+websites and optional tools above have their own privacy policies.
+
 ## Development
 
 ```bash
@@ -82,3 +101,6 @@ Design constraints live in [DESIGN.md](DESIGN.md).
 ## License
 
 MIT
+
+NaviBoard bundles Mozilla Readability (Apache-2.0) and Turndown with its GFM
+plugin (MIT). Their license notices are preserved in the distributed bundle.
