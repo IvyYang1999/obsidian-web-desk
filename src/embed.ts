@@ -52,7 +52,7 @@ import {
   switchCardViewMode,
   type CardViewMode,
 } from "./card-view-state";
-import { beginCanvasPointerSession } from "./canvas-pointer";
+import { beginCanvasPointerSession, type CanvasPointerSessionHandle } from "./canvas-pointer";
 import { CanvasEdgePan } from "./canvas-edge-pan";
 import { planCanvasObjectDeletion } from "./canvas-delete";
 import {
@@ -1322,16 +1322,7 @@ export class DeskEmbed extends MarkdownRenderChild {
         this.scheduleWrite();
       },
     });
-    this.edgePan = new CanvasEdgePan({
-      rect: () => this.rootEl.getBoundingClientRect(),
-      step: (dx, dy) => {
-        this.panX += dx;
-        this.panY += dy;
-        session.replay();
-        this.syncRoom();
-        this.applyTransform();
-      },
-    });
+    this.edgePan = this.createEdgePan(session);
   }
 
   private renderRatings(): void {
@@ -1549,10 +1540,12 @@ export class DeskEmbed extends MarkdownRenderChild {
     const memberKeys = new Set(memberOrigins.map((object) => object.key));
     const excluded = new Set([`group:${group.id}`, ...memberKeys]);
     const snapSession = createCanvasSnapSession(this.snapTargets(excluded));
-    beginCanvasPointerSession({
+    const session = beginCanvasPointerSession({
       event,
       element: el,
       zoom: () => this.zoom,
+      pan: () => ({ x: this.panX, y: this.panY }),
+      onPointerMove: (client) => this.edgePan?.update(client),
       onMove: (delta) => {
         const snapped = snapSession.move(originRect, delta, this.zoom);
         group.x = snapped.rect.x;
@@ -1569,6 +1562,8 @@ export class DeskEmbed extends MarkdownRenderChild {
         this.renderArrows();
       },
       onEnd: (moved) => {
+        this.edgePan?.stop();
+        this.edgePan = null;
         snapSession.clear();
         this.snapGuideLayer?.hide();
         if (!moved) return;
@@ -1579,6 +1574,20 @@ export class DeskEmbed extends MarkdownRenderChild {
         this.roundEmbedObjectGeometry(this.allEmbedObjects().filter((object) => memberKeys.has(object.key)));
         this.recomputeEmbedGroupMembership();
         this.scheduleWrite();
+      },
+    });
+    this.edgePan = this.createEdgePan(session);
+  }
+
+  private createEdgePan(session: CanvasPointerSessionHandle): CanvasEdgePan {
+    return new CanvasEdgePan({
+      rect: () => this.rootEl.getBoundingClientRect(),
+      step: (dx, dy) => {
+        this.panX += dx;
+        this.panY += dy;
+        session.replay();
+        this.syncRoom();
+        this.applyTransform();
       },
     });
   }

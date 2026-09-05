@@ -39,7 +39,7 @@ import {
   switchCardViewMode,
   type CardViewMode,
 } from "./card-view-state";
-import { beginCanvasPointerSession } from "./canvas-pointer";
+import { beginCanvasPointerSession, type CanvasPointerSessionHandle } from "./canvas-pointer";
 import { CanvasEdgePan } from "./canvas-edge-pan";
 import { planCanvasObjectDeletion } from "./canvas-delete";
 import {
@@ -2455,17 +2455,7 @@ export class WebDeskView extends ItemView {
         void this.persistMovedObjects(this.selectedViewObjects());
       },
     });
-    // 拖到视口边缘时画布自己滚：先平移，再让对象跟手，再让墙包住新位置，最后才 clamp。
-    this.edgePan = new CanvasEdgePan({
-      rect: () => this.rootEl.getBoundingClientRect(),
-      step: (dx, dy) => {
-        this.transform.panX += dx;
-        this.transform.panY += dy;
-        session.replay();
-        this.syncRoom();
-        this.applyTransform();
-      },
-    });
+    this.edgePan = this.createEdgePan(session);
   }
 
   private async persistMovedObjects(objects: ViewObject[], recomputeAllAreas = false): Promise<void> {
@@ -2539,10 +2529,12 @@ export class WebDeskView extends ItemView {
     const memberKeys = new Set(memberOrigins.map((object) => object.key));
     const excluded = new Set([`group:${group.id}`, ...memberKeys]);
     const snapSession = createCanvasSnapSession(this.snapTargets(excluded));
-    beginCanvasPointerSession({
+    const session = beginCanvasPointerSession({
       event,
       element: el,
       zoom: () => this.transform.zoom,
+      pan: () => ({ x: this.transform.panX, y: this.transform.panY }),
+      onPointerMove: (client) => this.edgePan?.update(client),
       onMove: (delta) => {
         const snapped = snapSession.move(originRect, delta, this.transform.zoom);
         group.x = snapped.rect.x;
@@ -2559,6 +2551,8 @@ export class WebDeskView extends ItemView {
         this.renderArrows();
       },
       onEnd: (moved) => {
+        this.edgePan?.stop();
+        this.edgePan = null;
         snapSession.clear();
         this.snapGuideLayer?.hide();
         this.interactionLock -= 1;
@@ -2571,6 +2565,21 @@ export class WebDeskView extends ItemView {
           const members = this.allViewObjects().filter((object) => memberKeys.has(object.key));
           void this.persistMovedObjects(members, true);
         }
+      },
+    });
+    this.edgePan = this.createEdgePan(session);
+  }
+
+  /** 拖到视口边缘时画布自己滚：先平移，再让被拖对象跟手，再让墙包住新位置，最后才 clamp。 */
+  private createEdgePan(session: CanvasPointerSessionHandle): CanvasEdgePan {
+    return new CanvasEdgePan({
+      rect: () => this.rootEl.getBoundingClientRect(),
+      step: (dx, dy) => {
+        this.transform.panX += dx;
+        this.transform.panY += dy;
+        session.replay();
+        this.syncRoom();
+        this.applyTransform();
       },
     });
   }
