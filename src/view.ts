@@ -280,7 +280,7 @@ export class WebDeskView extends ItemView {
     this.canvasEl = this.rootEl.createDiv({ cls: "web-desk-canvas" });
 
     this.marqueeEl = this.rootEl.createDiv({ cls: "web-desk-marquee" });
-    this.marqueeEl.style.display = "none";
+    this.marqueeEl.removeClass("is-active");
 
     this.hintEl = this.rootEl.createDiv({ cls: "web-desk-hint" });
     this.hintEl.createDiv({ cls: "web-desk-hint-title", text: "把第一个网页放进来" });
@@ -513,7 +513,7 @@ export class WebDeskView extends ItemView {
 
     this.syncRoom();
 
-    this.hintEl.style.display = hasCanvasContent({
+    this.hintEl.toggleClass("is-hidden", hasCanvasContent({
       cards: this.cards.length,
       images: this.host.getImages().length,
       textboxes: this.host.getTextBoxes().length,
@@ -521,7 +521,7 @@ export class WebDeskView extends ItemView {
       arrows: this.host.getArrows().length,
       ratings: this.host.getRatings().length,
       pending: this.pendingImports.size,
-    }) ? "none" : "flex";
+    }));
   }
 
   private renderIcon(card: BookmarkCard): void {
@@ -716,7 +716,7 @@ export class WebDeskView extends ItemView {
 
   /** 手势结束后把拉过墙的部分弹回去。 */
   private settlePan(): void {
-    if (this.settleFrame !== null) cancelAnimationFrame(this.settleFrame);
+    if (this.settleFrame !== null) window.cancelAnimationFrame(this.settleFrame);
     const rect = this.rootEl.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
     const viewport = { width: rect.width, height: rect.height };
@@ -743,10 +743,10 @@ export class WebDeskView extends ItemView {
       this.transform.panX = fromX + (target.x - fromX) * ease;
       this.transform.panY = fromY + (target.y - fromY) * ease;
       this.applyTransform();
-      if (t < 1) this.settleFrame = requestAnimationFrame(step);
+      if (t < 1) this.settleFrame = window.requestAnimationFrame(step);
       else { this.settleFrame = null; this.saveTransformDebounced(); }
     };
-    this.settleFrame = requestAnimationFrame(step);
+    this.settleFrame = window.requestAnimationFrame(step);
   }
 
   /** 滚轮没有“松手”事件，用停止滚动来判定手势结束。 */
@@ -896,7 +896,7 @@ export class WebDeskView extends ItemView {
         return;
       }
       moved = true;
-      this.marqueeEl.style.display = "block";
+      this.marqueeEl.addClass("is-active");
       this.marqueeEl.style.left = `${x * this.transform.zoom + this.transform.panX}px`;
       this.marqueeEl.style.top = `${y * this.transform.zoom + this.transform.panY}px`;
       this.marqueeEl.style.width = `${w * this.transform.zoom}px`;
@@ -906,7 +906,7 @@ export class WebDeskView extends ItemView {
     const onUp = (upEvent: PointerEvent): void => {
       this.rootEl.removeEventListener("pointermove", onMove);
       this.rootEl.removeEventListener("pointerup", onUp);
-      this.marqueeEl.style.display = "none";
+      this.marqueeEl.removeClass("is-active");
 
       if (!moved) {
         if (!upEvent.shiftKey) {

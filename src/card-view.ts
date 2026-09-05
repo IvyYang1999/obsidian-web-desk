@@ -269,8 +269,9 @@ function renderCaption(
 }
 
 function resizeCaption(input: HTMLTextAreaElement): void {
-  input.style.height = "auto";
-  input.style.height = `${Math.min(88, Math.max(24, input.scrollHeight))}px`;
+  // 先让高度回到内容高度再量 scrollHeight，否则缩短文字时量到的是旧高度。
+  input.setCssStyles({ height: "auto" });
+  input.setCssStyles({ height: `${Math.min(88, Math.max(24, input.scrollHeight))}px` });
 }
 
 function stopCanvasGesture(element: HTMLElement): void {

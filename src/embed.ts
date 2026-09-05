@@ -285,7 +285,7 @@ export class DeskEmbed extends MarkdownRenderChild {
 
     this.canvasEl = this.rootEl.createDiv({ cls: "web-desk-canvas web-desk-embed-canvas" });
     this.marqueeEl = this.rootEl.createDiv({ cls: "web-desk-marquee" });
-    this.marqueeEl.style.display = "none";
+    this.marqueeEl.removeClass("is-active");
 
     this.hintEl = this.rootEl.createDiv({ cls: "web-desk-hint" });
     this.hintEl.createDiv({ cls: "web-desk-hint-title", text: "把第一个网页放进来" });
@@ -432,7 +432,6 @@ export class DeskEmbed extends MarkdownRenderChild {
     const handoff = this.currentHandoff();
     this.pendingHandoff = null;
     this.rootEl.addClass("is-superseded");
-    this.rootEl.style.pointerEvents = "none";
     if (this.isFullscreen) {
       this.isFullscreen = false;
       this.fullscreenFocusBoundary?.release({ restoreFocus: false });
@@ -1900,7 +1899,7 @@ export class DeskEmbed extends MarkdownRenderChild {
   /** 渲染后重算房间，内容长大墙就跟着长。 */
   private updateHint(): void {
     this.syncRoom();
-    this.hintEl.style.display = hasCanvasContent({
+    this.hintEl.toggleClass("is-hidden", hasCanvasContent({
       cards: this.data.items.length,
       images: this.data.images.length,
       textboxes: this.data.textboxes.length,
@@ -1908,7 +1907,7 @@ export class DeskEmbed extends MarkdownRenderChild {
       arrows: this.data.arrows.length,
       ratings: this.data.ratings.length,
       pending: this.pendingImports.size,
-    }) ? "none" : "flex";
+    }));
   }
 
   // ---------- 交互 ----------
@@ -2144,7 +2143,7 @@ export class DeskEmbed extends MarkdownRenderChild {
       const h = Math.abs(current.y - start.y);
       if (!moved && w < 4 && h < 4) return;
       moved = true;
-      this.marqueeEl.style.display = "block";
+      this.marqueeEl.addClass("is-active");
       this.marqueeEl.style.left = `${x * this.zoom + this.panX}px`;
       this.marqueeEl.style.top = `${y * this.zoom + this.panY}px`;
       this.marqueeEl.style.width = `${w * this.zoom}px`;
@@ -2153,7 +2152,7 @@ export class DeskEmbed extends MarkdownRenderChild {
     const onUp = (upEvent: PointerEvent): void => {
       this.rootEl.removeEventListener("pointermove", onMove);
       this.rootEl.removeEventListener("pointerup", onUp);
-      this.marqueeEl.style.display = "none";
+      this.marqueeEl.removeClass("is-active");
       if (!moved) {
         // 单击空白处：与主画布一致，非加选时清空选择。
         if (!additive && (this.selectedObjects.size || this.selectedGroupId || this.selectedArrowId)) {
@@ -3026,7 +3025,7 @@ export class DeskEmbed extends MarkdownRenderChild {
 
   /** 手势结束后把拉过墙的部分弹回去。 */
   private settlePan(): void {
-    if (this.settleFrame !== null) cancelAnimationFrame(this.settleFrame);
+    if (this.settleFrame !== null) window.cancelAnimationFrame(this.settleFrame);
     const rect = this.rootEl.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
     const viewport = { width: rect.width, height: rect.height };
@@ -3047,10 +3046,10 @@ export class DeskEmbed extends MarkdownRenderChild {
       this.panX = fromX + (target.x - fromX) * ease;
       this.panY = fromY + (target.y - fromY) * ease;
       this.applyTransform();
-      if (t < 1) this.settleFrame = requestAnimationFrame(step);
+      if (t < 1) this.settleFrame = window.requestAnimationFrame(step);
       else this.settleFrame = null;
     };
-    this.settleFrame = requestAnimationFrame(step);
+    this.settleFrame = window.requestAnimationFrame(step);
   }
 
   private scheduleSettle(): void {

@@ -68,11 +68,11 @@ export class CanvasEdgePan {
     this.pointer = client;
     if (this.frame !== null) return;
     this.lastAt = performance.now();
-    this.frame = requestAnimationFrame(this.tick);
+    this.frame = window.requestAnimationFrame(this.tick);
   }
 
   stop(): void {
-    if (this.frame !== null) cancelAnimationFrame(this.frame);
+    if (this.frame !== null) window.cancelAnimationFrame(this.frame);
     this.frame = null;
     this.pointer = null;
   }
@@ -87,6 +87,6 @@ export class CanvasEdgePan {
     if (velocity.x !== 0 || velocity.y !== 0) {
       this.options.step(velocity.x * seconds, velocity.y * seconds);
     }
-    this.frame = requestAnimationFrame(this.tick);
+    this.frame = window.requestAnimationFrame(this.tick);
   };
 }

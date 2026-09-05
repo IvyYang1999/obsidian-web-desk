@@ -1430,8 +1430,9 @@ button.web-desk-selection-tool:focus-visible {
   display: none;
 }
 
-/* 框选 */
+/* 框选：显隐用类而不是内联 display，满足 Obsidian 审核的 no-static-styles-assignment */
 .web-desk-marquee {
+  display: none;
   position: absolute;
   border: 1px solid var(--interactive-accent);
   background-color: var(--interactive-accent-hover);
@@ -1539,10 +1540,13 @@ button.web-desk-tool-btn:focus-visible {
 }
 
 /* 空态提示 */
+.web-desk-marquee.is-active { display: block; }
+
+/* 空态提示：默认显示，有内容时由 is-hidden 关掉 */
 .web-desk-hint {
   position: absolute;
   inset: 0;
-  display: none;
+  display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
@@ -1551,6 +1555,8 @@ button.web-desk-tool-btn:focus-visible {
   pointer-events: none;
   z-index: 3;
 }
+
+.web-desk-hint.is-hidden { display: none; }
 
 .web-desk-hint-title {
   font-size: var(--font-ui-larger);
@@ -2383,3 +2389,6 @@ button.web-desk-create-tool:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .web-desk-pending-card.is-loading .web-desk-pending-icon { animation: none; }
 }
+
+/* 被新渲染实例接管的旧 DOM 立即退出交互 */
+.web-desk-embed.is-superseded { pointer-events: none; }
