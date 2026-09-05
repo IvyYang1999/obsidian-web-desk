@@ -1,31 +1,39 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="把网页、本机应用和笔记摆在一张自由画布上，像整理桌面一样归类。Obsidian 插件，每个收藏都是一个纯 Markdown 文件。">
+<meta property="og:title" content="网页桌面 · 把收藏摆成一张桌面">
+<meta property="og:description" content="网页、本机应用和笔记摆在一张自由画布上。Obsidian 插件，每个收藏都是一个纯 Markdown 文件。">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://obsidian-web-desk.vercel.app">
+<meta name="twitter:card" content="summary_large_image">
 <title>网页桌面</title>
 <link rel="icon" type="image/svg+xml" href="./logo.svg">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@1&display=swap">
 <style>
 :root{
-  --bg:#fbfbfc; --bg-2:#f3f4f6; --surface:#ffffff; --ink:#1f2328; --ink-2:#4b5563; --muted:#8b93a1; --line:#e3e6eb; --line-2:#cfd4dc;
-  --accent:#7c6cf2; --accent-ink:#5b4bd6; --accent-soft:rgba(124,108,242,.12); --ring:0 0 0 2px var(--accent);
+  --bg:#fbfbfc; --bg-2:#f3f4f6; --surface:#ffffff; --ink:#1f2328; --ink-2:#4b5563; --muted:#6b7280; --gold:#8a6508; --line:#e3e6eb; --line-2:#cfd4dc;
+  --accent:#6d5ae6; --accent-ink:#5b4bd6; --accent-soft:rgba(109,90,230,.12); --ring:0 0 0 2px var(--accent);
   --dot:#d9dde3; --shadow-float:0 8px 24px rgba(16,24,40,.12),0 1px 2px rgba(16,24,40,.06); --shadow-obj:0 1px 2px rgba(16,24,40,.06);
   --green:#3fb37f; --red:#f2665f; --amber:#e6a23c; --blue:#4f8ef7;
   --sans:"Inter",-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Noto Sans SC",system-ui,sans-serif;
   --serif:"Instrument Serif","Songti SC","Noto Serif SC",Georgia,serif;
 }
 @media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]) .btn.primary,
+  :root:not([data-theme="light"]) .tabs button[aria-selected="true"]{color:#1e1e1e}
   :root:not([data-theme="light"]){
-    --bg:#1e1e1e; --bg-2:#262626; --surface:#2a2a2a; --ink:#e6e6e6; --ink-2:#b8bcc4; --muted:#7e8590; --line:#3a3a3a; --line-2:#4a4a4a;
+    --bg:#1e1e1e; --bg-2:#262626; --surface:#2a2a2a; --ink:#e6e6e6; --ink-2:#b8bcc4; --muted:#9aa1ad; --gold:#e6b95c; --line:#3a3a3a; --line-2:#4a4a4a;
     --accent:#a48cff; --accent-ink:#c3b2ff; --accent-soft:rgba(164,140,255,.18); --dot:#3a3d42;
     --shadow-float:0 10px 28px rgba(0,0,0,.55),0 1px 2px rgba(0,0,0,.4); --shadow-obj:0 1px 2px rgba(0,0,0,.4);
   }
 }
 :root[data-theme="dark"]{
-  --bg:#1e1e1e; --bg-2:#262626; --surface:#2a2a2a; --ink:#e6e6e6; --ink-2:#b8bcc4; --muted:#7e8590; --line:#3a3a3a; --line-2:#4a4a4a;
+  --bg:#1e1e1e; --bg-2:#262626; --surface:#2a2a2a; --ink:#e6e6e6; --ink-2:#b8bcc4; --muted:#9aa1ad; --gold:#e6b95c; --line:#3a3a3a; --line-2:#4a4a4a;
   --accent:#a48cff; --accent-ink:#c3b2ff; --accent-soft:rgba(164,140,255,.18); --dot:#3a3d42;
   --shadow-float:0 10px 28px rgba(0,0,0,.55),0 1px 2px rgba(0,0,0,.4); --shadow-obj:0 1px 2px rgba(0,0,0,.4);
 }
 *{box-sizing:border-box}
+:where(a,button,[tabindex]):focus-visible{outline:none;box-shadow:var(--ring)}
 html{scroll-behavior:smooth}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased;
   background-image:radial-gradient(circle,var(--dot) 1px,transparent 1px);background-size:28px 28px}
@@ -47,25 +55,30 @@ button{font:inherit;color:inherit;cursor:pointer}
 
 /* ---- 第一屏 ---- */
 .hero{padding-block:118px 72px;text-align:center}
-.h1{font-size:clamp(40px,7.2vw,86px);line-height:1.12;font-weight:500;letter-spacing:-.02em;margin:0;color:var(--ink-2)}
+.h1{font-size:clamp(40px,7.2vw,86px);line-height:1.12;font-weight:500;margin:0;color:var(--ink-2)}
 .h1 strong{font-weight:500;color:var(--ink)}
 .h1 .line{display:block;white-space:nowrap}
 .obj{display:inline-flex;vertical-align:middle;margin:0 .12em;position:relative;top:-.06em;transition:transform .35s cubic-bezier(.2,.8,.2,1)}
 .obj:hover{transform:translateY(-4px) rotate(-3deg)}
 .tile{width:.92em;height:.92em;border-radius:.24em;display:grid;place-items:center;border:1px solid var(--line);background:var(--surface);box-shadow:var(--shadow-obj)}
 .tile svg{width:58%;height:58%}
-.tile.app{border:0;box-shadow:0 6px 16px rgba(0,0,0,.18)}
+/* 系统图标自带形状，不套瓦片；但阴影要和另外两个同一档，否则三个对象三套规则。 */
+.tile.app{border:0;box-shadow:var(--shadow-obj)}
 .tile.app svg{width:100%;height:100%}
 .tile.note{background:var(--bg-2)}
 .h1 .paper{width:1.45em;height:.92em;border-radius:.22em;border:1px solid var(--line);background:var(--surface);box-shadow:var(--shadow-obj);display:grid;grid-template-rows:38% 1fr;overflow:hidden;text-align:left}
 .paper i{display:block;background:linear-gradient(120deg,#ffd4c2,#ffb5a0)}
 .paper b{display:block;padding:.06em .12em 0;font-size:.16em;line-height:1.35;font-weight:600;color:var(--ink)}
 .paper b small{display:block;font-weight:400;color:var(--muted)}
-.tag{margin:26px 0 0;font-family:var(--serif);font-style:italic;font-size:clamp(20px,2.4vw,28px);color:var(--muted)}
+.tag{margin:26px 0 0;font-size:clamp(19px,2.2vw,26px);letter-spacing:.02em;color:var(--ink-2)}
+/* 中文没有斜体传统，合成的 oblique 读起来像渲染 bug；只让拉丁文用真斜体。 */
+.tag em{font-family:var(--serif);font-style:italic;font-size:1.14em;color:var(--muted)}
 .cta{display:flex;gap:12px;justify-content:center;margin:40px 0 0;flex-wrap:wrap}
 .btn{display:inline-flex;align-items:center;gap:8px;height:46px;padding:0 20px;border-radius:12px;border:1px solid var(--line);background:var(--surface);font-weight:500;font-size:15px;box-shadow:var(--shadow-obj)}
 .btn:hover{border-color:var(--line-2)}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+:root[data-theme="dark"] .btn.primary,
+:root[data-theme="dark"] .tabs button[aria-selected="true"]{color:#1e1e1e}
 .btn.primary:hover{background:var(--accent-ink);border-color:var(--accent-ink)}
 .btn svg{width:16px;height:16px}
 .fine{margin:14px 0 0;font-size:13.5px;color:var(--muted)}
@@ -106,7 +119,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .item.app .thumb svg{width:96%;height:96%}
 .item.app.sel .thumb{background:var(--accent-soft)}
 .item .label{margin-top:6px;font-size:13px;line-height:1.25;text-align:center;color:var(--ink);width:120px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.item .badge{position:absolute;top:6px;right:6px;height:18px;padding:0 5px 0 4px;border-radius:999px;background:color-mix(in srgb,var(--surface) 92%,transparent);box-shadow:0 0 0 1px var(--line);font-size:10.5px;font-weight:700;color:#d8a928;display:flex;align-items:center}
+.item .badge{position:absolute;top:6px;right:6px;height:18px;padding:0 5px 0 4px;border-radius:999px;background:color-mix(in srgb,var(--surface) 92%,transparent);box-shadow:0 0 0 1px var(--line);font-size:10.5px;font-weight:700;color:var(--gold);display:flex;align-items:center}
 .card{position:absolute;width:300px;height:210px;border:1px solid var(--line);border-radius:10px;background:var(--surface);box-shadow:var(--shadow-obj);overflow:hidden;cursor:grab;display:grid;grid-template-rows:42% 1fr}
 .card.sel{border-color:var(--accent);box-shadow:var(--ring),var(--shadow-obj)}
 .card .cover{background:linear-gradient(120deg,#e9e3ff,#d7ecff);display:grid;place-items:center}
@@ -146,6 +159,25 @@ button{font:inherit;color:inherit;cursor:pointer}
 .demo-foot{display:flex;gap:18px;flex-wrap:wrap;margin:14px 0 0;font-size:13px;color:var(--muted)}
 .demo-foot span{display:inline-flex;align-items:center;gap:6px}
 
+/* ---- 画布 ↔ Markdown 对照：把「纯 Markdown 到底」变成看得见的事实 ---- */
+.mirror{display:grid;grid-template-columns:minmax(200px,260px) auto minmax(0,1fr);align-items:center;gap:24px;
+  margin:34px 0 0;padding:22px 24px;border:1px solid var(--line);border-radius:14px;background:var(--surface);box-shadow:var(--shadow-obj)}
+@media(max-width:820px){.mirror{grid-template-columns:1fr;gap:16px}.mirror .link{transform:rotate(90deg);justify-self:center}}
+.mirror .side{display:flex;flex-direction:column;align-items:center;gap:8px}
+.mirror .thumb{width:88px;height:88px;border-radius:12px;border:1px solid var(--line);background:var(--surface);box-shadow:var(--shadow-obj);display:grid;place-items:center;position:relative}
+.mirror .thumb .letter{width:72%;height:72%;border-radius:16%;display:grid;place-items:center;color:#fff;font-weight:600;font-size:34px;background:#e0af68}
+.mirror .thumb .badge{position:absolute;top:6px;right:6px;height:18px;padding:0 5px 0 4px;border-radius:999px;background:color-mix(in srgb,var(--surface) 92%,transparent);box-shadow:0 0 0 1px var(--line);font-size:10.5px;font-weight:700;color:var(--gold);display:flex;align-items:center}
+.mirror .cap{font-size:13px;line-height:1.3;text-align:center;color:var(--ink);max-width:120px}
+.mirror .link{color:var(--muted);display:grid;place-items:center}
+.mirror .link svg{width:22px;height:22px}
+.mirror .file{min-width:0}
+.mirror .path{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--muted);margin:0 0 8px;overflow-x:auto;white-space:nowrap}
+.mirror pre{margin:0;padding:14px 16px;border-radius:10px;background:var(--bg-2);overflow-x:auto;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.65;color:var(--ink-2)}
+.mirror pre b{color:var(--ink);font-weight:500}
+.mirror pre i{color:var(--accent);font-style:normal}
+.mirror-note{margin:12px 0 0;font-size:13.5px;color:var(--muted)}
+
 /* ---- 第三屏 ---- */
 .feat{padding-block:56px 24px;scroll-margin-top:96px}
 .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
@@ -155,7 +187,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .f .ic svg{width:18px;height:18px}
 .f h3{margin:0 0 6px;font-size:16px;font-weight:600}
 .f p{margin:0;color:var(--ink-2);font-size:14px;line-height:1.6}
-.f code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;padding:1px 6px;border-radius:5px;background:var(--bg-2)}
+.f code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;padding:1px 6px;border-radius:5px;background:var(--bg-2);white-space:nowrap}
 .install{margin:56px 0 0;padding:28px;scroll-margin-top:96px;border:1px solid var(--line);border-radius:16px;background:var(--surface);display:grid;grid-template-columns:1.1fr 1fr;gap:28px;align-items:center}
 @media(max-width:820px){.install{grid-template-columns:1fr}}
 .install h3{margin:0 0 6px;font-size:22px;font-weight:600;letter-spacing:-.01em}
@@ -163,7 +195,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .steps{margin:0;padding:0;list-style:none;display:grid;gap:8px;font-size:14px}
 .steps li{display:flex;gap:12px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
 .steps b{flex:none;width:22px;height:22px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-size:12px;display:grid;place-items:center;font-weight:600}
-.steps code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;padding:1px 6px;border-radius:5px;background:var(--bg-2)}
+.steps code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;padding:1px 6px;border-radius:5px;background:var(--bg-2);white-space:nowrap}
 footer{padding-block:48px 40px;text-align:center;color:var(--muted);font-size:13px}
 footer a{color:var(--ink-2);border-bottom:1px solid var(--line)}
 @media (prefers-reduced-motion: reduce){.obj,.tb{transition:none;animation:none}html{scroll-behavior:auto}}
@@ -187,7 +219,7 @@ footer a{color:var(--ink-2);border-bottom:1px solid var(--line)}
     <span class="line"><strong>笔记</strong><span class="obj"><span class="paper"><i></i><b>读书笔记<small>卡片笔记写作法</small></b></span></span>和<strong>想法</strong></span>
     <span class="line">摆在一张桌面上</span>
   </h1>
-  <p class="tag">在 Obsidian 里，纯 Markdown 到底。</p>
+  <p class="tag">在 <em>Obsidian</em> 里，纯 <em>Markdown</em> 到底。</p>
   <div class="cta">
     <a class="btn primary" href="#install"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>安装到 Obsidian</a>
     <a class="btn" href="#demo">先在下面玩一下 ↓</a>
@@ -222,12 +254,35 @@ footer a{color:var(--ink-2);border-bottom:1px solid var(--line)}
     </div>
     <div class="toast" id="toast"></div>
   </div>
-  <div class="demo-foot"><span>双击网页 → 新标签打开</span><span>双击应用 → 启动</span><span>拖进区域 → 写进 frontmatter</span><span><span class="kbd">Esc</span> 取消选择</span></div>
+  <div class="mirror">
+    <div class="side">
+      <div class="thumb"><span class="letter">P</span><span class="badge">5★</span></div>
+      <div class="cap">How to Do Great Work</div>
+    </div>
+    <div class="link" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h16m0 0-4-4m4 4-4 4M20 15H4m0 0 4-4m-4 4 4 4"/></svg>
+    </div>
+    <div class="file">
+      <p class="path">收藏夹/2026-08-19【文章】How to Do Great Work.md</p>
+      <pre>---
+<b>title</b>: How to Do Great Work
+<b>url</b>: https://paulgraham.com/greatwork.html
+<b>type</b>: article
+<i>desk_x</i>: 200
+<i>desk_y</i>: 90
+<i>desk_group</i>: 阅读
+<i>desk_rating</i>: 5
+---
+
+正文（Readability 抽取）…</pre>
+    </div>
+  </div>
+  <p class="mirror-note">左边那张卡片，在磁盘上就是右边这个文件。<b>紫色的四行</b>是它在画布上的位置、分组和评分——你每拖动一次，改的就是这几行。删掉插件，文件原样留在 vault 里。</p>
 </section>
 
 <section class="feat wrap" id="feat">
   <div class="grid3">
-    <div class="f"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg></div><h3>纯 Markdown 到底</h3><p>丢一个链接进来，先抓正文或站点卡片，落成 <code>收藏夹/</code> 里的一个 md；图标位置、大小、所属区域都写在 frontmatter。没有数据库，没有 sidecar，文件挪走画布就跟着变。</p></div>
+    <div class="f"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg></div><h3>纯 Markdown 到底</h3><p>丢一个链接进来，先抓正文或站点卡片，落成 <code>收藏夹/</code> 里的一个 md。没有数据库，没有 sidecar；文件挪走，画布跟着变。</p></div>
     <div class="f"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><path d="M17 14v6m-3-3h6"/></svg></div><h3>网页、应用、笔记同桌</h3><p>从浏览器拖链接，从 Finder 拖 <code>.app</code>、文件夹或文件，从 vault 拖 Markdown 和 PDF。都是桌面上的图标：网页开浏览器，应用直接启动，笔记开标签页。</p></div>
     <div class="f"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M8 11h6M11 8v6"/></svg></div><h3>缩小是为了导航</h3><p>区域名字始终是屏幕上的 12px；缩小时说明、摘要、标题依次让位给图标本身。一眼看全局，滚一下就回到细节。笔记正文里也能嵌一块同样的画布。</p></div>
   </div>
