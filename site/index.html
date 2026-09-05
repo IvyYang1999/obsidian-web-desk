@@ -1,4 +1,6 @@
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="把网页、本机应用和笔记摆在一张自由画布上，像整理桌面一样归类。Obsidian 插件，每个收藏都是一个纯 Markdown 文件。">
 <title>网页桌面</title>
 <link rel="icon" type="image/svg+xml" href="./logo.svg">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@1&display=swap">
@@ -29,7 +31,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font
   background-image:radial-gradient(circle,var(--dot) 1px,transparent 1px);background-size:28px 28px}
 a{color:inherit;text-decoration:none}
 button{font:inherit;color:inherit;cursor:pointer}
-.wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+.wrap{max-width:1120px;margin:0 auto;padding-inline:24px}
 
 /* ---- 导航药丸 ---- */
 .nav{position:sticky;top:18px;z-index:50;display:flex;justify-content:center;padding:0 16px}
@@ -44,7 +46,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .theme svg{width:16px;height:16px}
 
 /* ---- 第一屏 ---- */
-.hero{padding:118px 0 72px;text-align:center}
+.hero{padding-block:118px 72px;text-align:center}
 .h1{font-size:clamp(40px,7.2vw,86px);line-height:1.12;font-weight:500;letter-spacing:-.02em;margin:0;color:var(--ink-2)}
 .h1 strong{font-weight:500;color:var(--ink)}
 .h1 .line{display:block;white-space:nowrap}
@@ -69,7 +71,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .fine{margin:14px 0 0;font-size:13.5px;color:var(--muted)}
 
 /* ---- 第二屏：画布 ---- */
-.demo-sec{padding:36px 0 40px}
+.demo-sec{padding-block:36px 40px;scroll-margin-top:96px}
 .demo-head{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin:0 0 16px;flex-wrap:wrap}
 .demo-head h2{margin:0;font-size:22px;font-weight:600;letter-spacing:-.01em}
 .tabs{display:flex;gap:2px;padding:3px;border:1px solid var(--line);border-radius:12px;background:var(--surface);box-shadow:var(--shadow-obj);flex-wrap:wrap}
@@ -145,7 +147,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .demo-foot span{display:inline-flex;align-items:center;gap:6px}
 
 /* ---- 第三屏 ---- */
-.feat{padding:56px 0 24px}
+.feat{padding-block:56px 24px;scroll-margin-top:96px}
 .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
 @media(max-width:820px){.grid3{grid-template-columns:1fr}}
 .f{padding:22px 22px 20px;border:1px solid var(--line);border-radius:14px;background:var(--surface);box-shadow:var(--shadow-obj)}
@@ -154,7 +156,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .f h3{margin:0 0 6px;font-size:16px;font-weight:600}
 .f p{margin:0;color:var(--ink-2);font-size:14px;line-height:1.6}
 .f code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;padding:1px 6px;border-radius:5px;background:var(--bg-2)}
-.install{margin:56px 0 0;padding:28px;border:1px solid var(--line);border-radius:16px;background:var(--surface);display:grid;grid-template-columns:1.1fr 1fr;gap:28px;align-items:center}
+.install{margin:56px 0 0;padding:28px;scroll-margin-top:96px;border:1px solid var(--line);border-radius:16px;background:var(--surface);display:grid;grid-template-columns:1.1fr 1fr;gap:28px;align-items:center}
 @media(max-width:820px){.install{grid-template-columns:1fr}}
 .install h3{margin:0 0 6px;font-size:22px;font-weight:600;letter-spacing:-.01em}
 .install p{margin:0;color:var(--ink-2);font-size:14.5px}
@@ -162,7 +164,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .steps li{display:flex;gap:12px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
 .steps b{flex:none;width:22px;height:22px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-size:12px;display:grid;place-items:center;font-weight:600}
 .steps code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;padding:1px 6px;border-radius:5px;background:var(--bg-2)}
-footer{padding:48px 0 40px;text-align:center;color:var(--muted);font-size:13px}
+footer{padding-block:48px 40px;text-align:center;color:var(--muted);font-size:13px}
 footer a{color:var(--ink-2);border-bottom:1px solid var(--line)}
 @media (prefers-reduced-motion: reduce){.obj,.tb{transition:none;animation:none}html{scroll-behavior:auto}}
 @media(max-width:640px){.hero{padding-top:96px}.h1 .line{white-space:normal}.pill nav a{padding:8px 9px;font-size:14px}}
@@ -463,7 +465,7 @@ footer a{color:var(--ink-2);border-bottom:1px solid var(--line)}
   function apply(elastic) {
     const r = canvas.getBoundingClientRect();
     if (r.width > 0 && r.height > 0) {
-      const floor = Math.max(0.25, Math.min(1, Math.min(r.width / room.w, r.height / room.h) * 0.75));
+      const floor = zoomFloor(r);
       if (state.view.z < floor) state.view.z = floor;
       const hard = hardPan(state.view, state.view.z, r);
       state.view.x = elastic ? hard.x + dampen(state.view.x - hard.x) : hard.x;
@@ -497,7 +499,8 @@ footer a{color:var(--ink-2);border-bottom:1px solid var(--line)}
   const scheduleSettle = () => { clearTimeout(settleTimer); settleTimer = setTimeout(settle, 140); };
 
   // 拖到视口边缘，画布朝那个方向自己滚，墙跟着长——扩展空间不需要任何显式操作。
-  const EDGE_BAND = 64, EDGE_SPEED = 1100;
+  // 带别太宽、且要停留一下才滚：靠边的区域本身就是合法放置目标，否则「放到这里」会被误判成「要滚动」。
+  const EDGE_BAND = 44, EDGE_SPEED = 1100, EDGE_DWELL = 180;
   function edgeVelocity(c, r) {
     if (r.width <= EDGE_BAND * 2 || r.height <= EDGE_BAND * 2) return { x: 0, y: 0 };
     const axis = (pos, start, size) => {
@@ -509,34 +512,55 @@ footer a{color:var(--ink-2);border-bottom:1px solid var(--line)}
     return { x: axis(c.x, r.left, r.width), y: axis(c.y, r.top, r.height) };
   }
   function makeEdgePan(replay) {
-    let frame = null, pointer = null, at = 0;
+    let frame = null, pointer = null, at = 0, entered = 0;
     const tick = (now) => {
       if (!pointer) { frame = null; return; }
       const dt = Math.min(0.05, Math.max(0, (now - at) / 1000)); at = now;
       const v = edgeVelocity(pointer, canvas.getBoundingClientRect());
-      if (v.x || v.y) { state.view.x += v.x * dt; state.view.y += v.y * dt; replay(); syncRoom(); apply(); }
+      if (!v.x && !v.y) entered = 0;
+      else {
+        if (!entered) entered = now;
+        if (now - entered >= EDGE_DWELL) { state.view.x += v.x * dt; state.view.y += v.y * dt; replay(); syncRoom(); apply(); }
+      }
       frame = requestAnimationFrame(tick);
     };
     return {
       update(c) { pointer = c; if (frame === null) { at = performance.now(); frame = requestAnimationFrame(tick); } },
-      stop() { if (frame) cancelAnimationFrame(frame); frame = null; pointer = null; },
+      stop() { if (frame) cancelAnimationFrame(frame); frame = null; pointer = null; entered = 0; },
     };
   }
   const toCanvas = (cx, cy) => { const r = canvas.getBoundingClientRect(); return { x: (cx - r.left - state.view.x) / state.view.z, y: (cy - r.top - state.view.y) / state.view.z }; };
+  const zoomFloor = (r) => Math.max(0.25, Math.min(1, Math.min(r.width / room.w, r.height / room.h) * 0.75));
   function zoomAt(cx, cy, f) {
-    const r = canvas.getBoundingClientRect(), px = cx - r.left, py = cy - r.top, nz = Math.min(3, Math.max(0.25, state.view.z * f)), k = nz / state.view.z;
+    const r = canvas.getBoundingClientRect(), px = cx - r.left, py = cy - r.top;
+    const nz = Math.min(3, Math.max(zoomFloor(r), state.view.z * f));
+    if (Math.abs(nz - state.view.z) < 1e-6) return;  // 到底了就整个操作作废，不要只改 pan
+    const k = nz / state.view.z;
     state.view.x = px - (px - state.view.x) * k; state.view.y = py - (py - state.view.y) * k; state.view.z = nz; apply();
   }
   function fit() {
     syncRoom();
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const ex = (x, y, w, h) => { minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x + w); maxY = Math.max(maxY, y + h); };
+    for (const a of state.areas) ex(a.x, a.y, a.w, a.h);
+    for (const o of all()) { const f = frame(o); ex(o.x, o.y, f.w, f.h); }
+    // 取景按内容走，房间只管边界；拟合房间会把最小尺寸的空白算进来，画面会显得很空。
+    const box = Number.isFinite(minX)
+      ? { x: minX - 32, y: minY - 32, w: maxX - minX + 64, h: maxY - minY + 64 }
+      : { x: room.x, y: room.y, w: room.w, h: room.h };
     const r = canvas.getBoundingClientRect(), W = r.width - 48, H = r.height - 110;
-    const z = Math.min(1.25, Math.max(0.25, Math.min(W / room.w, H / room.h)));
-    state.view = { z, x: 24 + (W - room.w * z) / 2 - room.x * z, y: 48 + (H - room.h * z) / 2 - room.y * z }; apply();
+    const z = Math.min(1.1, Math.max(zoomFloor(r), Math.min(W / box.w, H / box.h)));
+    state.view = { z, x: 24 + (W - box.w * z) / 2 - box.x * z, y: 48 + (H - box.h * z) / 2 - box.y * z }; apply();
   }
   canvas.addEventListener("wheel", (e) => {
+    if (e.ctrlKey || e.metaKey) { e.preventDefault(); zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.01)); return; }
+    // 这是落地页，纵向滚轮的默认归属是页面：只有画布在这个方向还能动时才接管。
+    const r = canvas.getBoundingClientRect();
+    const nx = clampAxis(state.view.x - e.deltaX, room.x, room.w, state.view.z, r.width);
+    const ny = clampAxis(state.view.y - e.deltaY, room.y, room.h, state.view.z, r.height);
+    if (Math.abs(nx - state.view.x) < 0.5 && Math.abs(ny - state.view.y) < 0.5) return;
     e.preventDefault();
-    if (e.ctrlKey || e.metaKey) { zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.01)); return; }
-    state.view.x -= e.deltaX; state.view.y -= e.deltaY; apply(true); scheduleSettle();
+    state.view.x = nx; state.view.y = ny; apply(); 
   }, { passive: false });
   document.querySelectorAll("[data-zoom]").forEach((b) => b.addEventListener("click", () => { const r = canvas.getBoundingClientRect(); const k = b.dataset.zoom; if (k === "fit") fit(); else zoomAt(r.left + r.width / 2, r.top + r.height / 2, k === "in" ? 1.2 : 1 / 1.2); }));
 
@@ -617,7 +641,12 @@ footer a{color:var(--ink-2);border-bottom:1px solid var(--line)}
     document.querySelectorAll("[data-scene]").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
     loadScene(b.dataset.scene);
   }));
-  new ResizeObserver(() => positionToolbar()).observe(canvas);
+  let resizeTimer = 0;
+  new ResizeObserver(() => {
+    positionToolbar();
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { if (state.sel) apply(); else fit(); }, 120);
+  }).observe(canvas);
   loadScene("collect"); requestAnimationFrame(fit);
 })();
 </script>
