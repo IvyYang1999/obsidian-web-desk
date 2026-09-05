@@ -71,7 +71,7 @@ function prepareFixture() {
   for (const filename of ["main.js", "manifest.json", "styles.css"]) {
     fs.copyFileSync(path.join(REPO, filename), path.join(pluginDir, filename));
   }
-  fs.writeFileSync(path.join(VAULT, ".obsidian/community-plugins.json"), JSON.stringify(["web-desk"]));
+  fs.writeFileSync(path.join(VAULT, ".obsidian/community-plugins.json"), JSON.stringify(["naviboard"]));
   fs.writeFileSync(path.join(VAULT, ".obsidian/app.json"), JSON.stringify({ livePreview: true }));
 
   fs.writeFileSync(path.join(VAULT, "Reading note.md"), [
@@ -171,7 +171,7 @@ async function openFilePreviewFromSelection(page, canvas, cardSelector) {
 
     await page.waitForFunction(() => window.app?.workspace?.layoutReady, null, { timeout: 60_000 });
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      if (await page.evaluate(() => Boolean(app.plugins.plugins["web-desk"]))) break;
+      if (await page.evaluate(() => Boolean(app.plugins.plugins["naviboard"]))) break;
       await page.evaluate(() => {
         const trust = [...document.querySelectorAll(".modal-container button")]
           .find((button) => /Trust author|信任作者/.test(button.textContent ?? ""));
@@ -179,12 +179,12 @@ async function openFilePreviewFromSelection(page, canvas, cardSelector) {
       });
       await sleep(500);
     }
-    if (!await page.evaluate(() => Boolean(app.plugins.plugins["web-desk"]))) {
-      await page.evaluate(() => app.plugins.enablePluginAndSave("web-desk"));
+    if (!await page.evaluate(() => Boolean(app.plugins.plugins["naviboard"]))) {
+      await page.evaluate(() => app.plugins.enablePluginAndSave("naviboard"));
     }
-    await page.waitForFunction(() => Boolean(app.plugins.plugins["web-desk"]), null, { timeout: 30_000 });
+    await page.waitForFunction(() => Boolean(app.plugins.plugins["naviboard"]), null, { timeout: 30_000 });
 
-    await page.evaluate(() => app.commands.executeCommandById("web-desk:open-web-desk"));
+    await page.evaluate(() => app.commands.executeCommandById("naviboard:open-web-desk"));
     const main = page.locator(".web-desk-root:visible").last();
     await main.locator('.web-desk-icon[data-path="收藏夹/Markdown preview.md"]').waitFor({ state: "visible", timeout: 30_000 });
     await main.getByRole("button", { name: "适应", exact: true }).click();

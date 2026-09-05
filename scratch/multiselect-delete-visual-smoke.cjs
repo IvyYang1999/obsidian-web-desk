@@ -71,7 +71,7 @@ function prepareFixture() {
   for (const filename of ["main.js", "manifest.json", "styles.css"]) {
     fs.copyFileSync(path.join(REPO, filename), path.join(pluginDir, filename));
   }
-  fs.writeFileSync(path.join(VAULT, ".obsidian/community-plugins.json"), JSON.stringify(["web-desk"]));
+  fs.writeFileSync(path.join(VAULT, ".obsidian/community-plugins.json"), JSON.stringify(["naviboard"]));
   fs.writeFileSync(path.join(VAULT, ".obsidian/app.json"), JSON.stringify({ livePreview: true }));
   fs.writeFileSync(path.join(pluginDir, "data.json"), JSON.stringify(AREA_NEW_PROBE ? {
     settings: { bookmarkFolder: "收藏夹", imageFolder: "附件", defaultIconSize: 96, blockedEmbedHosts: [] },
@@ -189,7 +189,7 @@ function assertAllSelected(state, surface) {
     });
     await page.waitForFunction(() => window.app?.workspace?.layoutReady, null, { timeout: 60_000 });
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      if (await page.evaluate(() => Boolean(app.plugins.plugins["web-desk"]))) break;
+      if (await page.evaluate(() => Boolean(app.plugins.plugins["naviboard"]))) break;
       await page.evaluate(() => {
         const trust = [...document.querySelectorAll(".modal-container button")]
           .find((button) => /Trust author|信任作者/.test(button.textContent ?? ""));
@@ -197,12 +197,12 @@ function assertAllSelected(state, surface) {
       });
       await sleep(500);
     }
-    if (!await page.evaluate(() => Boolean(app.plugins.plugins["web-desk"]))) {
-      await page.evaluate(() => app.plugins.enablePluginAndSave("web-desk"));
+    if (!await page.evaluate(() => Boolean(app.plugins.plugins["naviboard"]))) {
+      await page.evaluate(() => app.plugins.enablePluginAndSave("naviboard"));
     }
-    await page.waitForFunction(() => Boolean(app.plugins.plugins["web-desk"]), null, { timeout: 30_000 });
+    await page.waitForFunction(() => Boolean(app.plugins.plugins["naviboard"]), null, { timeout: 30_000 });
 
-    await page.evaluate(() => app.commands.executeCommandById("web-desk:open-web-desk"));
+    await page.evaluate(() => app.commands.executeCommandById("naviboard:open-web-desk"));
     const main = page.locator(".web-desk-root:visible").last();
     await main.locator(".web-desk-icon").waitFor({ state: "visible", timeout: 30_000 });
     if (!AREA_NEW_PROBE || AREA_NEW_FIT_PROBE) {
@@ -364,7 +364,7 @@ function assertAllSelected(state, surface) {
       mainSelected,
       embedSelected,
       preservation,
-      pluginOccurrences: enabled.filter((id) => id === "web-desk").length,
+      pluginOccurrences: enabled.filter((id) => id === "naviboard").length,
       screenshots: [MAIN_SCREENSHOT, EMBED_SCREENSHOT],
     }));
     await browser.close();

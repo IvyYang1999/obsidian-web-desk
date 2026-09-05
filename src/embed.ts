@@ -3060,11 +3060,17 @@ export class DeskEmbed extends MarkdownRenderChild {
     }, 140);
   }
 
+  private zoomFloor(rect: DOMRect): number {
+    return minZoomForRoom(this.room, { width: rect.width, height: rect.height }, MIN_ZOOM);
+  }
+
   private zoomAt(clientX: number, clientY: number, factor: number): void {
     const rect = this.rootEl.getBoundingClientRect();
     const px = clientX - rect.left;
     const py = clientY - rect.top;
-    const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, this.zoom * factor));
+    // 下限在这里就夹住，否则 pan 会按未被夹的缩放算，内容每缩一次就漂。
+    const next = Math.min(MAX_ZOOM, Math.max(this.zoomFloor(rect), this.zoom * factor));
+    if (Math.abs(next - this.zoom) < 1e-6) return;
     const ratio = next / this.zoom;
     this.panX = px - (px - this.panX) * ratio;
     this.panY = py - (py - this.panY) * ratio;
@@ -3078,14 +3084,19 @@ export class DeskEmbed extends MarkdownRenderChild {
   }
 
   private fitContent(): void {
-    // 适应内容 = 适应整个房间：让墙也进画面，用户才知道自己在多大的空间里。
+    // 取景按内容走，边界归房间管。
     this.syncRoom();
     const rect = this.rootEl.getBoundingClientRect();
+    const content = this.contentBounds();
+    const margin = 48;
+    const bounds = content
+      ? { minX: content.minX - margin, minY: content.minY - margin, maxX: content.maxX + margin, maxY: content.maxY + margin }
+      : { minX: this.room.x, minY: this.room.y, maxX: this.room.x + this.room.w, maxY: this.room.y + this.room.h };
     const fitted = fitCanvasBounds(
       rect.width,
       rect.height,
-      { minX: this.room.x, minY: this.room.y, maxX: this.room.x + this.room.w, maxY: this.room.y + this.room.h },
-      MIN_ZOOM,
+      bounds,
+      this.zoomFloor(rect),
       1.25,
     );
     this.zoom = fitted.zoom;

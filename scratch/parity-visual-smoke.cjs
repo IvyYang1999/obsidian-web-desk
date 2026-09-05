@@ -52,7 +52,7 @@ function prepareFixture() {
   }
   fs.writeFileSync(
     path.join(VAULT, ".obsidian/community-plugins.json"),
-    JSON.stringify(["web-desk"]),
+    JSON.stringify(["naviboard"]),
   );
   fs.writeFileSync(path.join(VAULT, ".obsidian/app.json"), JSON.stringify({ livePreview: true }));
   fs.writeFileSync(
@@ -233,7 +233,7 @@ function prepareFixture() {
 
     await page.waitForFunction(() => window.app?.workspace?.layoutReady, null, { timeout: 60_000 });
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      if (await page.evaluate(() => Boolean(app.plugins.plugins["web-desk"]))) break;
+      if (await page.evaluate(() => Boolean(app.plugins.plugins["naviboard"]))) break;
       await page.evaluate(() => {
         const trust = [...document.querySelectorAll(".modal-container button")]
           .find((button) => /Trust author|信任作者/.test(button.textContent ?? ""));
@@ -241,12 +241,12 @@ function prepareFixture() {
       });
       await sleep(750);
     }
-    if (!await page.evaluate(() => Boolean(app.plugins.plugins["web-desk"]))) {
-      await page.evaluate(() => app.plugins.enablePluginAndSave("web-desk"));
+    if (!await page.evaluate(() => Boolean(app.plugins.plugins["naviboard"]))) {
+      await page.evaluate(() => app.plugins.enablePluginAndSave("naviboard"));
     }
-    await page.waitForFunction(() => Boolean(app.plugins.plugins["web-desk"]), null, { timeout: 30_000 });
+    await page.waitForFunction(() => Boolean(app.plugins.plugins["naviboard"]), null, { timeout: 30_000 });
 
-    await page.evaluate(() => app.commands.executeCommandById("web-desk:open-web-desk"));
+    await page.evaluate(() => app.commands.executeCommandById("naviboard:open-web-desk"));
     await page.waitForSelector(".web-desk-root .web-desk-icon", { timeout: 30_000 });
     const main = page.locator(".web-desk-root:visible").last();
     const mainFit = await main.locator(".web-desk-toolbar .web-desk-tool-btn").evaluateAll((buttons) => buttons.map((b) => b.getAttribute("aria-label") || b.textContent.trim()));
@@ -636,6 +636,15 @@ function prepareFixture() {
         return file ? await app.vault.read(file) : "missing";
       });
       const fullscreenCount = await page.locator(".web-desk-embed.is-fullscreen").count();
+      await page.screenshot({ path: "/tmp/webdesk-area-fail.png" });
+      const areaDiag = await page.evaluate(() => {
+        const root = document.querySelector(".web-desk-embed.is-fullscreen");
+        return [...(root?.querySelectorAll("[role=group]") ?? [])].map((g) => {
+          const cs = getComputedStyle(g); const r = g.getBoundingClientRect();
+          return { label: g.getAttribute("aria-label"), display: cs.display, visibility: cs.visibility, w: Math.round(r.width), h: Math.round(r.height), left: Math.round(r.left), top: Math.round(r.top) };
+        });
+      });
+      console.log("AREA DIAG", JSON.stringify(areaDiag));
       throw new Error(`area did not carry its member: ${JSON.stringify({ areaBox, textBeforeDrop, areaAfterDrop, areaAfterMove, textBeforeAreaMove, textAfterAreaMove, areaMoveStart, fullscreenCount, embeddedSource })}`);
     }
     const areaBehavior = {
@@ -923,7 +932,7 @@ function prepareFixture() {
       editableBackspaceState,
       embedDeleteState,
       restoredHeight,
-      pluginOccurrences: enabled.filter((id) => id === "web-desk").length,
+      pluginOccurrences: enabled.filter((id) => id === "naviboard").length,
       screenshots: [MAIN_SCREENSHOT, NARROW_SCREENSHOT, DARK_NARROW_SCREENSHOT, COLOR_PICKER_SCREENSHOT, COLOR_PICKER_DARK_SCREENSHOT, AREA_DROP_SCREENSHOT, INLINE_GROUP_SCREENSHOT, CLEAN_SCREENSHOT, EMBED_SCREENSHOT, DRILLDOWN_SCREENSHOT],
     }));
     await browser.close();

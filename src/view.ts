@@ -783,11 +783,19 @@ export class WebDeskView extends ItemView {
     this.scheduleSettle();
   }
 
+  /** 当前房间允许的最小缩放；到了这里再缩就只是把内容推远。 */
+  private zoomFloor(rect: DOMRect): number {
+    return minZoomForRoom(this.room, { width: rect.width, height: rect.height }, MIN_ZOOM);
+  }
+
   private zoomAt(clientX: number, clientY: number, factor: number): void {
     const rect = this.rootEl.getBoundingClientRect();
     const px = clientX - rect.left;
     const py = clientY - rect.top;
-    const nextZoom = clamp(this.transform.zoom * factor, MIN_ZOOM, MAX_ZOOM);
+    // 下限必须在这里就夹住：若等到 applyTransform 再夹，pan 已按未被夹的缩放算过，
+    // 两者不一致会让内容每缩一次就往角落漂。
+    const nextZoom = clamp(this.transform.zoom * factor, this.zoomFloor(rect), MAX_ZOOM);
+    if (Math.abs(nextZoom - this.transform.zoom) < 1e-6) return;
     const ratio = nextZoom / this.transform.zoom;
 
     this.transform.panX = px - (px - this.transform.panX) * ratio;
@@ -838,13 +846,18 @@ export class WebDeskView extends ItemView {
       expand(rating.x + RATING_WIDTH * scale, rating.y + RATING_HEIGHT * scale);
     }
 
-    // 适应内容 = 适应整个房间：让墙也进画面，用户才知道自己在多大的空间里。
+    // 取景按内容走，边界归房间管：拟合房间会把最小尺寸的空白一起算进来，画面会显得很空。
     const rect = this.rootEl.getBoundingClientRect();
+    const content = this.contentBounds();
+    const margin = 48;
+    const bounds = content
+      ? { minX: content.minX - margin, minY: content.minY - margin, maxX: content.maxX + margin, maxY: content.maxY + margin }
+      : { minX: this.room.x, minY: this.room.y, maxX: this.room.x + this.room.w, maxY: this.room.y + this.room.h };
     const fitted = fitCanvasBounds(
       rect.width,
       rect.height,
-      { minX: this.room.x, minY: this.room.y, maxX: this.room.x + this.room.w, maxY: this.room.y + this.room.h },
-      MIN_ZOOM,
+      bounds,
+      this.zoomFloor(rect),
       1.25,
     );
     this.transform.zoom = fitted.zoom;

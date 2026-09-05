@@ -5,7 +5,7 @@ const { buildSync } = require("esbuild");
 const built = buildSync({ entryPoints: ["src/canvas-edge-pan.ts"], bundle: true, format: "cjs", platform: "node", write: false });
 const mod = { exports: {} };
 new Function("module", "exports", "require", built.outputFiles[0].text)(mod, mod.exports, require);
-const { edgePanVelocity, EDGE_BAND, EDGE_MAX_SPEED } = mod.exports;
+const { edgePanVelocity, EDGE_BAND, EDGE_MAX_SPEED, EDGE_DWELL_MS } = mod.exports;
 
 const RECT = { left: 0, top: 0, width: 1000, height: 700 };
 
@@ -36,6 +36,13 @@ test("指针跑到容器外按满速，快速甩动不会忽快忽慢", () => {
 test("两个方向可以同时触发，斜着拖会斜着滚", () => {
   const corner = edgePanVelocity({ x: 2, y: 2 }, RECT);
   assert.ok(corner.x > 0 && corner.y > 0);
+});
+
+test("边缘带不宜过宽，且需要停留才触发，避免把靠边的放置误判成滚动", () => {
+  assert.ok(EDGE_BAND <= 48, `边缘带 ${EDGE_BAND} 太宽`);
+  assert.ok(EDGE_DWELL_MS >= 120, `停留阈值 ${EDGE_DWELL_MS} 太短`);
+  // 带外一点点就不该有速度
+  assert.deepEqual(edgePanVelocity({ x: RECT.width - EDGE_BAND - 2, y: 350 }, RECT), { x: 0, y: 0 });
 });
 
 test("容器太小时不启用，否则整个画布都是边缘带", () => {

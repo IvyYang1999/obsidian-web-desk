@@ -12,8 +12,13 @@ export interface EdgePanRect {
   height: number;
 }
 
-/** 边缘感应带宽度（屏幕像素）。 */
-export const EDGE_BAND = 64;
+/**
+ * 边缘感应带宽度（屏幕像素）。
+ * 别设太宽：靠近视口边缘的区域本身就是合法的放置目标，带太宽会把「放到这里」误判成「要滚动」。
+ */
+export const EDGE_BAND = 44;
+/** 进入边缘带后要停留这么久才开始滚，快速掠过或就是想放在边上都不会误触发。 */
+export const EDGE_DWELL_MS = 180;
 /** 贴到最边上时每秒平移多少屏幕像素。 */
 export const EDGE_MAX_SPEED = 1100;
 
@@ -61,6 +66,7 @@ export class CanvasEdgePan {
   private frame: number | null = null;
   private pointer: { x: number; y: number } | null = null;
   private lastAt = 0;
+  private enteredBandAt = 0;
 
   constructor(private readonly options: CanvasEdgePanOptions) {}
 
@@ -75,6 +81,7 @@ export class CanvasEdgePan {
     if (this.frame !== null) window.cancelAnimationFrame(this.frame);
     this.frame = null;
     this.pointer = null;
+    this.enteredBandAt = 0;
   }
 
   private readonly tick = (now: number): void => {
@@ -84,8 +91,13 @@ export class CanvasEdgePan {
     const seconds = Math.min(0.05, Math.max(0, (now - this.lastAt) / 1000));
     this.lastAt = now;
     const velocity = edgePanVelocity(pointer, this.options.rect());
-    if (velocity.x !== 0 || velocity.y !== 0) {
-      this.options.step(velocity.x * seconds, velocity.y * seconds);
+    if (velocity.x === 0 && velocity.y === 0) {
+      this.enteredBandAt = 0;
+    } else {
+      if (this.enteredBandAt === 0) this.enteredBandAt = now;
+      if (now - this.enteredBandAt >= EDGE_DWELL_MS) {
+        this.options.step(velocity.x * seconds, velocity.y * seconds);
+      }
     }
     this.frame = window.requestAnimationFrame(this.tick);
   };
