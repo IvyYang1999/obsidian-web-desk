@@ -40,6 +40,7 @@ import {
   type CardViewMode,
 } from "./card-view-state";
 import { beginCanvasPointerSession } from "./canvas-pointer";
+import { CanvasEdgePan } from "./canvas-edge-pan";
 import { planCanvasObjectDeletion } from "./canvas-delete";
 import {
   canvasGridBackground,
@@ -169,6 +170,7 @@ export class WebDeskView extends ItemView {
   private room: RoomRect = deriveRoom(null);
   private settleFrame: number | null = null;
   private settleTimer: number | null = null;
+  private edgePan: CanvasEdgePan | null = null;
   private marqueeEl!: HTMLElement;
   private hintEl!: HTMLElement;
   private zoomLabelEl!: HTMLElement;
@@ -2421,10 +2423,12 @@ export class WebDeskView extends ItemView {
     if (origins.length === 0 || !bounds) return;
     const snapSession = createCanvasSnapSession(this.snapTargets(new Set(origins.map((object) => object.key))));
     this.interactionLock += 1;
-    beginCanvasPointerSession({
+    const session = beginCanvasPointerSession({
       event,
       element: el,
       zoom: () => this.transform.zoom,
+      pan: () => ({ x: this.transform.panX, y: this.transform.panY }),
+      onPointerMove: (client) => this.edgePan?.update(client),
       onMove: (delta) => {
         const snapped = snapSession.move(bounds, delta, this.transform.zoom);
         const translated = translateObjectGroup(origins, {
@@ -2438,6 +2442,8 @@ export class WebDeskView extends ItemView {
         this.renderObjectSelection();
       },
       onEnd: (moved) => {
+        this.edgePan?.stop();
+        this.edgePan = null;
         snapSession.clear();
         this.snapGuideLayer?.hide();
         this.clearAreaDropTargets();
@@ -2447,6 +2453,17 @@ export class WebDeskView extends ItemView {
           return;
         }
         void this.persistMovedObjects(this.selectedViewObjects());
+      },
+    });
+    // 拖到视口边缘时画布自己滚：先平移，再让对象跟手，再让墙包住新位置，最后才 clamp。
+    this.edgePan = new CanvasEdgePan({
+      rect: () => this.rootEl.getBoundingClientRect(),
+      step: (dx, dy) => {
+        this.transform.panX += dx;
+        this.transform.panY += dy;
+        session.replay();
+        this.syncRoom();
+        this.applyTransform();
       },
     });
   }

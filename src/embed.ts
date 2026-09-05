@@ -53,6 +53,7 @@ import {
   type CardViewMode,
 } from "./card-view-state";
 import { beginCanvasPointerSession } from "./canvas-pointer";
+import { CanvasEdgePan } from "./canvas-edge-pan";
 import { planCanvasObjectDeletion } from "./canvas-delete";
 import {
   canvasGridBackground,
@@ -191,6 +192,7 @@ export class DeskEmbed extends MarkdownRenderChild {
   private room: RoomRect = deriveRoom(null);
   private settleFrame: number | null = null;
   private settleTimer: number | null = null;
+  private edgePan: CanvasEdgePan | null = null;
   private hintEl!: HTMLElement;
   private zoomEl!: HTMLElement;
   private fullscreenButtonEl!: HTMLButtonElement;
@@ -1287,10 +1289,12 @@ export class DeskEmbed extends MarkdownRenderChild {
     const bounds = objectGroupBounds(origins);
     if (origins.length === 0 || !bounds) return;
     const snapSession = createCanvasSnapSession(this.snapTargets(new Set(origins.map((object) => object.key))));
-    beginCanvasPointerSession({
+    const session = beginCanvasPointerSession({
       event,
       element: el,
       zoom: () => this.zoom,
+      pan: () => ({ x: this.panX, y: this.panY }),
+      onPointerMove: (client) => this.edgePan?.update(client),
       onMove: (delta) => {
         const snapped = snapSession.move(bounds, delta, this.zoom);
         const translated = translateObjectGroup(origins, {
@@ -1304,6 +1308,8 @@ export class DeskEmbed extends MarkdownRenderChild {
         this.renderEmbedObjectSelection();
       },
       onEnd: (moved) => {
+        this.edgePan?.stop();
+        this.edgePan = null;
         snapSession.clear();
         this.snapGuideLayer?.hide();
         this.clearAreaDropTargets();
@@ -1314,6 +1320,16 @@ export class DeskEmbed extends MarkdownRenderChild {
         this.roundEmbedObjectGeometry(this.selectedEmbedObjects());
         this.recomputeEmbedGroupMembership();
         this.scheduleWrite();
+      },
+    });
+    this.edgePan = new CanvasEdgePan({
+      rect: () => this.rootEl.getBoundingClientRect(),
+      step: (dx, dy) => {
+        this.panX += dx;
+        this.panY += dy;
+        session.replay();
+        this.syncRoom();
+        this.applyTransform();
       },
     });
   }
